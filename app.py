@@ -50,26 +50,51 @@ def _get_drive_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
+def _shared_drive_params():
+    """Return Google Drive API parameters needed for My Drive and Shared Drives."""
+    params = {
+        "supportsAllDrives": True,
+        "includeItemsFromAllDrives": True,
+    }
+    drive_id = os.environ.get("DRIVE_ID")
+    if drive_id:
+        params.update({"corpora": "drive", "driveId": drive_id})
+    return params
+
+
 def _list_images(service, folder_id: str):
-    """List image files in a Drive folder."""
+    """List all image files in a Drive folder, including Shared Drive items."""
     q = (
         f"'{folder_id}' in parents and trashed = false and "
         "(mimeType contains 'image/' or "
         "name contains '.jpg' or name contains '.jpeg' or "
         "name contains '.png' or name contains '.webp')"
     )
-    results = (
-        service.files()
-        .list(q=q, fields="files(id, name, mimeType)", pageSize=100)
-        .execute()
-    )
-    return results.get("files", [])
+    files = []
+    page_token = None
+    while True:
+        params = {
+            "q": q,
+            "fields": "nextPageToken, files(id, name, mimeType)",
+            "pageSize": 100,
+            **_shared_drive_params(),
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        results = service.files().list(**params).execute()
+        files.extend(results.get("files", []))
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            return files
 
 
 def _download_file(service, file_id: str, dest_path: str):
     from googleapiclient.http import MediaIoBaseDownload
 
-    request = service.files().get_media(fileId=file_id)
+    request = service.files().get_media(
+        fileId=file_id,
+        supportsAllDrives=True,
+    )
     with open(dest_path, "wb") as f:
         downloader = MediaIoBaseDownload(f, request)
         done = False
@@ -80,21 +105,39 @@ def _download_file(service, file_id: str, dest_path: str):
 def _upload_file(service, local_path: str, folder_id: str, filename: str):
     from googleapiclient.http import MediaFileUpload
 
-    q = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
-    existing = service.files().list(q=q, fields="files(id)").execute().get("files", [])
+    # Escape apostrophes because Drive query strings use single quotes.
+    safe_filename = filename.replace("'", "\\'")
+    q = f"name = '{safe_filename}' and '{folder_id}' in parents and trashed = false"
+    existing = (
+        service.files()
+        .list(
+            q=q,
+            fields="files(id)",
+            pageSize=10,
+            **_shared_drive_params(),
+        )
+        .execute()
+        .get("files", [])
+    )
 
     media = MediaFileUpload(local_path, resumable=True)
     if existing:
         service.files().update(
             fileId=existing[0]["id"],
             media_body=media,
+            supportsAllDrives=True,
         ).execute()
         return existing[0]["id"]
     else:
         meta = {"name": filename, "parents": [folder_id]}
         created = (
             service.files()
-            .create(body=meta, media_body=media, fields="id")
+            .create(
+                body=meta,
+                media_body=media,
+                fields="id",
+                supportsAllDrives=True,
+            )
             .execute()
         )
         return created["id"]

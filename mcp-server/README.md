@@ -28,7 +28,12 @@ URL: `https://YOUR-RENDER-URL/mcp`
 
 Secret name: `google-drive`
 
+Create `AI_Input` and `AI_Output` inside the same Google Shared Drive, then grant the service-account email access as **Content manager**.
+
 Keys:
 - `GOOGLE_SERVICE_ACCOUNT_JSON` – full service account JSON
-- `INPUT_FOLDER_ID` – Drive folder ID for input images
-- `OUTPUT_FOLDER_ID` – Drive folder ID for output images
+- `INPUT_FOLDER_ID` – Shared Drive folder ID for input images
+- `OUTPUT_FOLDER_ID` – Shared Drive folder ID for output images
+- `DRIVE_ID` – Shared Drive ID; recommended so searches target the correct drive
+
+The service account can read files from shared folders, but normal My Drive uploads can fail because service accounts do not have personal storage quota. The code uses `supportsAllDrives=true`, Shared Drive-aware listing, and pagination.
