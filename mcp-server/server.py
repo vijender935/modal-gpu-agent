@@ -1,11 +1,13 @@
 """
 MCP Server for Modal GPU Agent
-Exposes image generation + GPU code execution to Grok / Claude / Cursor
+Exposes image generation + GPU code execution to Claude / Grok / Cursor
+WITH proper OAuth discovery endpoints for Claude integration
 """
 
 import os
 import httpx
 from fastmcp import FastMCP
+from contextlib import asynccontextmanager
 
 # Modal Endpoints
 IMAGE_ENDPOINT = os.getenv(
@@ -17,8 +19,69 @@ CODE_ENDPOINT = os.getenv(
     "https://vijender935--gpu-agent-run-code-endpoint.modal.run"
 )
 
+# Get base URL for OAuth discovery
+BASE_URL = os.getenv("BASE_URL", "https://modal-mcp.onrender.com")
+
+# Initialize FastMCP
 mcp = FastMCP("Modal GPU Agent")
 
+
+# ═══════════════════════════════════════════════════════════════════
+# OAuth Discovery Endpoints (Claude UI ke liye)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.get("/.well-known/oauth-protected-resource")
+async def oauth_protected_resource():
+    """OAuth protected resource discovery endpoint"""
+    return {
+        "urls": [f"{BASE_URL}/mcp"]
+    }
+
+
+@mcp.get("/.well-known/oauth-protected-resource/mcp")
+async def oauth_protected_resource_mcp():
+    """MCP-specific resource endpoint"""
+    return {
+        "mcp": f"{BASE_URL}/mcp"
+    }
+
+
+@mcp.get("/.well-known/oauth-authorization-server")
+async def oauth_authorization_server():
+    """OAuth authorization server discovery"""
+    return {
+        "authorization_endpoint": f"{BASE_URL}/authorize",
+        "issuer": BASE_URL,
+        "token_endpoint": f"{BASE_URL}/token"
+    }
+
+
+@mcp.post("/register")
+async def register_oauth():
+    """OAuth client registration endpoint"""
+    return {
+        "status": "ok",
+        "message": "MCP Server ready for integration"
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Health Check (Render Free Tier ke liye - keep-alive)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.get("/health")
+async def health_check():
+    """Health check endpoint to prevent service shutdown"""
+    return {
+        "status": "healthy",
+        "server": "Modal GPU Agent",
+        "mcp_ready": True
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MCP Tools
+# ═══════════════════════════════════════════════════════════════════
 
 @mcp.tool
 async def generate_image(
@@ -101,6 +164,13 @@ if torch.cuda.is_available():
     return await run_gpu_code(code)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Server Startup
+# ═══════════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
+    print(f"🚀 Starting Modal GPU Agent MCP Server on port {port}")
+    print(f"📍 Base URL: {BASE_URL}")
+    print(f"✅ OAuth endpoints enabled for Claude integration")
     mcp.run(transport="http", host="0.0.0.0", port=port)
