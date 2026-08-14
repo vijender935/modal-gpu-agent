@@ -1,21 +1,20 @@
 """
-Modal GPU Agent - Image Generation + General Heavy Compute
-Ready for MCP wrapping later
+Modal GPU Agent - Image Generation + Drive Processing + General GPU Compute
 """
 
 import modal
 import io
+import os
+import json
+import tempfile
 from pathlib import Path
-from paths import INPUT_PATH, OUTPUT_PATH
 
-# -----------------------------
-# Modal App + Image
-# -----------------------------
 app = modal.App("gpu-agent")
 
-# Base image with common ML libraries
+# Base image with ML + Drive + OpenCV + YOLO deps
 image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install("libgl1", "libglib2.0-0")
     .pip_install(
         "torch",
         "torchvision",
@@ -25,13 +24,205 @@ image = (
         "safetensors",
         "Pillow",
         "numpy",
+        "opencv-python-headless",
+        "ultralytics",
         "fastapi[standard]",
         "python-multipart",
+        "google-api-python-client",
+        "google-auth",
+        "google-auth-httplib2",
     )
 )
 
-# Volume for caching models (optional but recommended)
 model_volume = modal.Volume.from_name("gpu-agent-models", create_if_missing=True)
+
+
+def _get_drive_service():
+    """Build Google Drive service from Modal secret."""
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    sa_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    creds = service_account.Credentials.from_service_account_info(
+        sa_info,
+        scopes=["https://www.googleapis.com/auth/drive"],
+    )
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def _list_images(service, folder_id: str):
+    """List image files in a Drive folder."""
+    q = (
+        f"'{folder_id}' in parents and trashed = false and "
+        "(mimeType contains 'image/' or "
+        "name contains '.jpg' or name contains '.jpeg' or "
+        "name contains '.png' or name contains '.webp')"
+    )
+    results = (
+        service.files()
+        .list(q=q, fields="files(id, name, mimeType)", pageSize=100)
+        .execute()
+    )
+    return results.get("files", [])
+
+
+def _download_file(service, file_id: str, dest_path: str):
+    from googleapiclient.http import MediaIoBaseDownload
+
+    request = service.files().get_media(fileId=file_id)
+    with open(dest_path, "wb") as f:
+        downloader = MediaIoBaseDownload(f, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+
+def _upload_file(service, local_path: str, folder_id: str, filename: str):
+    from googleapiclient.http import MediaFileUpload
+
+    # If same name exists, update it; else create
+    q = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+    existing = service.files().list(q=q, fields="files(id)").execute().get("files", [])
+
+    media = MediaFileUpload(local_path, resumable=True)
+    if existing:
+        service.files().update(
+            fileId=existing[0]["id"],
+            media_body=media,
+        ).execute()
+        return existing[0]["id"]
+    else:
+        meta = {"name": filename, "parents": [folder_id]}
+        created = (
+            service.files()
+            .create(body=meta, media_body=media, fields="id")
+            .execute()
+        )
+        return created["id"]
+
+
+def _smart_crop(img, target_w=1080, target_h=2340):
+    """
+    YOLO Pose based smart crop (from original body cropper script).
+    Returns (success, mode, cropped_bgr_image, message)
+    """
+    import cv2
+    import numpy as np
+    from ultralytics import YOLO
+
+    h, w = img.shape[:2]
+
+    model = YOLO("yolov8n-pose.pt")
+    results = model(img, verbose=False)
+
+    if (
+        len(results) == 0
+        or results[0].keypoints is None
+        or len(results[0].keypoints.xy) == 0
+    ):
+        return False, None, None, "No pose detected"
+
+    kpts = results[0].keypoints.xy[0].cpu().numpy()
+    confs = (
+        results[0].keypoints.conf[0].cpu().numpy()
+        if results[0].keypoints.conf is not None
+        else np.zeros(17)
+    )
+
+    if len(kpts) < 13:
+        return False, None, None, "Insufficient keypoints"
+
+    mode = "closeup"
+    knees_visible = confs[13] > 0.5 or confs[14] > 0.5
+    ankles_visible = confs[15] > 0.5 or confs[16] > 0.5
+
+    if knees_visible or ankles_visible:
+        mode = "portrait"
+    else:
+        hips_visible = confs[11] > 0.5 or confs[12] > 0.5
+        if hips_visible and confs[0] > 0.5:
+            face_y_real = kpts[0][1]
+            l_hip_y = kpts[11][1]
+            r_hip_y = kpts[12][1]
+            midriff_y_real = (
+                (l_hip_y + r_hip_y) / 2
+                if confs[11] > 0.5 and confs[12] > 0.5
+                else max(l_hip_y, r_hip_y)
+            )
+            body_ratio = h / (midriff_y_real - face_y_real + 1)
+            if body_ratio >= 3.0:
+                mode = "portrait"
+
+    face_y = int(kpts[0][1]) if kpts[0][1] > 0 else h // 6
+    l_shoulder_x = kpts[5][0]
+    r_shoulder_x = kpts[6][0]
+    l_hip_y = kpts[11][1]
+    r_hip_y = kpts[12][1]
+
+    midriff_y = (
+        int((l_hip_y + r_hip_y) / 2)
+        if l_hip_y > 0 and r_hip_y > 0
+        else h // 2
+    )
+    center_x = (
+        int((l_shoulder_x + r_shoulder_x) / 2)
+        if l_shoulder_x > 0 and r_shoulder_x > 0
+        else w // 2
+    )
+
+    desired_ratio = target_w / target_h
+    body_segment_height = midriff_y - face_y
+    if body_segment_height <= 0:
+        body_segment_height = h // 4
+
+    if mode == "closeup":
+        crop_h = int(body_segment_height * 1.45)
+        headroom_ratio = 0.18
+        noise_level = 1.5
+        sharp_blend = 0.2
+    else:
+        crop_h = int(body_segment_height * 2.6)
+        headroom_ratio = 0.15
+        noise_level = 1.2
+        sharp_blend = 0.3
+
+    crop_w = int(crop_h * desired_ratio)
+
+    if crop_h > h or crop_w > w:
+        scale = min(h / crop_h, w / crop_w)
+        crop_h = int(crop_h * scale)
+        crop_w = int(crop_w * scale)
+
+    ymin = face_y - int(crop_h * headroom_ratio)
+    xmin = center_x - int(crop_w / 2)
+
+    if ymin < 0:
+        ymin = 0
+    elif ymin + crop_h > h:
+        ymin = h - crop_h
+
+    if xmin < 0:
+        xmin = 0
+    elif xmin + crop_w > w:
+        xmin = w - crop_w
+
+    ymax = ymin + crop_h
+    xmax = xmin + crop_w
+
+    cropped = img[ymin:ymax, xmin:xmax]
+    if cropped.size == 0:
+        return False, None, None, "Crop failed"
+
+    final = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
+
+    sharpen_kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+    sharpened = cv2.filter2D(final, -1, sharpen_kernel)
+    final = cv2.addWeighted(final, 1.0 - sharp_blend, sharpened, sharp_blend, 0)
+
+    noise = np.random.normal(0, noise_level, final.shape)
+    final = np.clip(final.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+    return True, mode, final, f"Processed with {mode} mode"
 
 
 # -----------------------------
@@ -39,25 +230,19 @@ model_volume = modal.Volume.from_name("gpu-agent-models", create_if_missing=True
 # -----------------------------
 @app.function(
     image=image,
-    gpu="T4",                    # Start cheap, upgrade later (A10, L40S, A100...)
-    timeout=10 * 60,             # 10 minutes
+    gpu="T4",
+    timeout=10 * 60,
     scaledown_window=60,
 )
 def run_python_code(code: str, requirements: list[str] = None):
-    """
-    Run arbitrary Python code on GPU.
-    Useful for custom heavy compute tasks.
-    """
     import subprocess
     import sys
-    import tempfile
-    import os
 
-    # Install extra requirements if provided
     if requirements:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet"] + requirements)
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--quiet"] + requirements
+        )
 
-    # Write code to temp file and execute
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(code)
         temp_path = f.name
@@ -80,11 +265,11 @@ def run_python_code(code: str, requirements: list[str] = None):
 
 
 # -----------------------------
-# 2. Image Generation (Flux Schnell - Fast)
+# 2. Image Generation (Flux)
 # -----------------------------
 @app.cls(
     image=image,
-    gpu="A10",                   # Better quality/speed balance
+    gpu="A10",
     timeout=10 * 60,
     scaledown_window=2 * 60,
     volumes={"/models": model_volume},
@@ -111,7 +296,6 @@ class ImageGenerator:
         seed: int = None,
     ) -> bytes:
         import torch
-        from PIL import Image
 
         generator = None
         if seed is not None:
@@ -123,25 +307,105 @@ class ImageGenerator:
             height=height,
             num_inference_steps=num_inference_steps,
             generator=generator,
-            guidance_scale=0.0,  # Schnell doesn't need guidance
+            guidance_scale=0.0,
         ).images[0]
 
-        # Convert to bytes
         buf = io.BytesIO()
         image.save(buf, format="PNG")
         return buf.getvalue()
 
 
 # -----------------------------
-# 3. Simple Web Endpoints (for testing)
+# 3. Google Drive smart crop processor
+# -----------------------------
+@app.function(
+    image=image,
+    gpu="T4",
+    timeout=15 * 60,
+    scaledown_window=60,
+    secrets=[modal.Secret.from_name("google-drive-secret")],
+)
+def process_drive_images(target_w: int = 1080, target_h: int = 2340):
+    """
+    Download images from Drive INPUT folder, smart-crop with YOLO Pose,
+    upload results to OUTPUT folder.
+    """
+    import cv2
+
+    input_folder_id = os.environ["INPUT_FOLDER_ID"]
+    output_folder_id = os.environ["OUTPUT_FOLDER_ID"]
+
+    service = _get_drive_service()
+    files = _list_images(service, input_folder_id)
+
+    if not files:
+        return {
+            "success": True,
+            "processed": 0,
+            "failed": 0,
+            "message": "No images found in input folder",
+            "details": [],
+        }
+
+    details = []
+    success_count = 0
+    failed_count = 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for fmeta in files:
+            name = fmeta["name"]
+            fid = fmeta["id"]
+            local_in = os.path.join(tmpdir, f"in_{name}")
+            local_out = os.path.join(tmpdir, f"out_{name}")
+
+            try:
+                _download_file(service, fid, local_in)
+                img = cv2.imread(local_in)
+                if img is None:
+                    details.append({"file": name, "ok": False, "msg": "Failed to read image"})
+                    failed_count += 1
+                    continue
+
+                ok, mode, cropped, msg = _smart_crop(img, target_w, target_h)
+                if not ok:
+                    details.append({"file": name, "ok": False, "msg": msg})
+                    failed_count += 1
+                    continue
+
+                # Keep extension-friendly output
+                out_name = name
+                if not out_name.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                    out_name = out_name + ".jpg"
+
+                ext = Path(out_name).suffix.lower()
+                if ext in (".jpg", ".jpeg"):
+                    cv2.imwrite(local_out, cropped, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                else:
+                    cv2.imwrite(local_out, cropped)
+
+                _upload_file(service, local_out, output_folder_id, out_name)
+                details.append({"file": name, "ok": True, "msg": msg, "mode": mode})
+                success_count += 1
+
+            except Exception as e:
+                details.append({"file": name, "ok": False, "msg": str(e)})
+                failed_count += 1
+
+    return {
+        "success": failed_count == 0,
+        "processed": success_count,
+        "failed": failed_count,
+        "message": f"Done. Success: {success_count}, Failed: {failed_count}",
+        "details": details,
+    }
+
+
+# -----------------------------
+# Web endpoints
 # -----------------------------
 @app.function(image=image)
 @modal.fastapi_endpoint(method="POST")
 def generate_image_endpoint(item: dict):
-    """
-    Test endpoint:
-    POST {"prompt": "a cyberpunk city", "width": 1024, "height": 1024}
-    """
     prompt = item.get("prompt", "a beautiful landscape")
     width = item.get("width", 1024)
     height = item.get("height", 1024)
@@ -149,36 +413,37 @@ def generate_image_endpoint(item: dict):
 
     generator = ImageGenerator()
     image_bytes = generator.generate.remote(
-        prompt=prompt,
-        width=width,
-        height=height,
-        seed=seed,
+        prompt=prompt, width=width, height=height, seed=seed
     )
 
     from fastapi.responses import Response
+
     return Response(content=image_bytes, media_type="image/png")
 
 
 @app.function(image=image)
 @modal.fastapi_endpoint(method="POST")
 def run_code_endpoint(item: dict):
-    """
-    Test endpoint for general code:
-    POST {"code": "print('hello from GPU')", "requirements": []}
-    """
     code = item.get("code", "print('No code provided')")
     requirements = item.get("requirements", [])
-    result = run_python_code.remote(code=code, requirements=requirements)
-    return result
+    return run_python_code.remote(code=code, requirements=requirements)
 
 
-# -----------------------------
-# Local entrypoint for testing
-# -----------------------------
+@app.function(
+    image=image,
+    secrets=[modal.Secret.from_name("google-drive-secret")],
+)
+@modal.fastapi_endpoint(method="POST")
+def process_drive_endpoint(item: dict = None):
+    item = item or {}
+    target_w = item.get("target_w", 1080)
+    target_h = item.get("target_h", 2340)
+    return process_drive_images.remote(target_w=target_w, target_h=target_h)
+
+
 @app.local_entrypoint()
 def main():
-    print("🚀 GPU Agent is ready.")
-    print(f"Input path: {INPUT_PATH}")
-    print(f"Output path: {OUTPUT_PATH}")
-    print("Deploy with: modal deploy app.py")
-    print("Then test the endpoints that Modal prints.")
+    print("GPU Agent ready.")
+    print("Deploy: modal deploy app.py")
+    print("Secret required: google-drive-secret")
+    print("  Keys: GOOGLE_SERVICE_ACCOUNT_JSON, INPUT_FOLDER_ID, OUTPUT_FOLDER_ID")

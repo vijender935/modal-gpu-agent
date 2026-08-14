@@ -1,25 +1,34 @@
 # MCP Server for Modal GPU Agent
 
-This lets you control the Modal GPU functions from Grok using natural language.
+Control Modal GPU functions from Grok.
+
+## Tools
+
+- `generate_image` – Flux image generation
+- `run_gpu_code` – run arbitrary Python on T4 GPU
+- `check_gpu` – CUDA / GPU health check
+- `process_images_from_drive` – YOLO smart-crop all images from Drive AI_Input → AI_Output
 
 ## Deploy on Render
 
-1. Create a new **Web Service** on Render
-2. Connect the repo `vijender935/modal-gpu-agent`
-3. Root Directory: `mcp-server`
-4. Build Command: `pip install -r requirements.txt`
-5. Start Command: `python server.py`
-6. Create Web Service
+1. Web Service, connect repo `vijender935/modal-gpu-agent`
+2. Root Directory: `mcp-server`
+3. Build: `pip install -r requirements.txt`
+4. Start: `python server.py`
+5. Optional env vars:
+   - `IMAGE_ENDPOINT`
+   - `CODE_ENDPOINT`
+   - `PROCESS_ENDPOINT`
 
-After deploy, copy the Render URL (e.g. https://modal-mcp.onrender.com)
+## Grok connector
 
-## Add to Grok
+URL: `https://YOUR-RENDER-URL/mcp`
 
-1. Go to https://grok.com/connectors
-2. Click **New Connector** → **Custom**
-3. Paste: `https://YOUR-RENDER-URL/mcp`
-4. Save
+## Modal secret required
 
-Now you can say in Grok:
-- "Generate an image of a cyberpunk city"
-- "Run this code on GPU: print(torch.cuda.is_available())"
+Secret name: `google-drive-secret`
+
+Keys:
+- `GOOGLE_SERVICE_ACCOUNT_JSON` – full service account JSON
+- `INPUT_FOLDER_ID` – Drive folder ID for input images
+- `OUTPUT_FOLDER_ID` – Drive folder ID for output images

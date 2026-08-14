@@ -1,48 +1,50 @@
 # Modal GPU Agent
 
-Full automatic GPU compute for:
-- Image Generation (Flux)
-- General heavy Python code on GPU
-- Ready to be wrapped as MCP server for Grok
+GPU compute on Modal + MCP for Grok:
 
-## How it deploys (Phone friendly)
+- Image generation (Flux Schnell)
+- Arbitrary Python on GPU
+- **Google Drive smart crop** (YOLO Pose) – AI_Input → AI_Output
 
-This repo uses **GitHub Actions** to deploy to Modal automatically.
+## One-time setup
 
-### Setup (one time)
+### 1. Modal token (GitHub Actions deploy)
 
-1. Go to [modal.com](https://modal.com) → create account
-2. Create a token: Settings → API Tokens → New Token
-3. Copy **Token ID** and **Token Secret**
-4. In this GitHub repo → Settings → Secrets and variables → Actions
-5. Add two secrets:
-   - `MODAL_TOKEN_ID`
-   - `MODAL_TOKEN_SECRET`
+Repo → Settings → Secrets → Actions:
 
-### Deploy
+- `MODAL_TOKEN_ID`
+- `MODAL_TOKEN_SECRET`
 
-Just push to `main` branch.  
-GitHub Actions will automatically run `modal deploy`.
+### 2. Google Drive secret (on Modal dashboard)
 
-You can also manually trigger from the **Actions** tab.
+Modal → Secrets → create **`google-drive-secret`** with:
 
-## After deploy
+| Key | Value |
+|-----|--------|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full service account JSON |
+| `INPUT_FOLDER_ID` | Drive folder ID for input |
+| `OUTPUT_FOLDER_ID` | Drive folder ID for output |
 
-Modal will create public endpoints.  
-Check the Actions logs or Modal dashboard for the URLs.
+Share both Drive folders with the service account email (Editor).
 
-## Test
+### 3. Deploy
 
-**Image Generation:**
-```bash
-curl -X POST https://YOUR-ENDPOINT/generate_image_endpoint \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "a cyberpunk city at night, highly detailed"}' \
-  --output result.png
-```
+Push to `main` → GitHub Actions runs `modal deploy app.py`.
 
-## Next
+Or manually: `modal deploy app.py`
 
-After this works, we will:
-1. Add more image/video tools
-2. Create MCP server so you can control it from Grok with natural language
+## Endpoints (after deploy)
+
+- `...-generate-image-endpoint.modal.run`
+- `...-run-code-endpoint.modal.run`
+- `...-process-drive-endpoint.modal.run`
+
+## MCP (Render)
+
+See `mcp-server/README.md`.
+
+## Test from Grok
+
+- "Check if GPU is working"
+- "Generate an image of a cyberpunk city"
+- "Process images from Drive" / "Run smart crop on AI_Input"
