@@ -80,7 +80,6 @@ def _download_file(service, file_id: str, dest_path: str):
 def _upload_file(service, local_path: str, folder_id: str, filename: str):
     from googleapiclient.http import MediaFileUpload
 
-    # If same name exists, update it; else create
     q = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
     existing = service.files().list(q=q, fields="files(id)").execute().get("files", [])
 
@@ -323,7 +322,7 @@ class ImageGenerator:
     gpu="T4",
     timeout=15 * 60,
     scaledown_window=60,
-    secrets=[modal.Secret.from_name("google-drive-secret")],
+    secrets=[modal.Secret.from_name("google-drive")],
 )
 def process_drive_images(target_w: int = 1080, target_h: int = 2340):
     """
@@ -372,7 +371,6 @@ def process_drive_images(target_w: int = 1080, target_h: int = 2340):
                     failed_count += 1
                     continue
 
-                # Keep extension-friendly output
                 out_name = name
                 if not out_name.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
                     out_name = out_name + ".jpg"
@@ -431,7 +429,7 @@ def run_code_endpoint(item: dict):
 
 @app.function(
     image=image,
-    secrets=[modal.Secret.from_name("google-drive-secret")],
+    secrets=[modal.Secret.from_name("google-drive")],
 )
 @modal.fastapi_endpoint(method="POST")
 def process_drive_endpoint(item: dict = None):
@@ -445,5 +443,5 @@ def process_drive_endpoint(item: dict = None):
 def main():
     print("GPU Agent ready.")
     print("Deploy: modal deploy app.py")
-    print("Secret required: google-drive-secret")
+    print("Secret required: google-drive")
     print("  Keys: GOOGLE_SERVICE_ACCOUNT_JSON, INPUT_FOLDER_ID, OUTPUT_FOLDER_ID")

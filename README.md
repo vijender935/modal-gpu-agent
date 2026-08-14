@@ -17,7 +17,7 @@ Repo → Settings → Secrets → Actions:
 
 ### 2. Google Drive secret (on Modal dashboard)
 
-Modal → Secrets → create **`google-drive-secret`** with:
+Modal → Secrets → create **`google-drive`** with:
 
 | Key | Value |
 |-----|--------|

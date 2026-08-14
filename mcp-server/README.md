@@ -26,7 +26,7 @@ URL: `https://YOUR-RENDER-URL/mcp`
 
 ## Modal secret required
 
-Secret name: `google-drive-secret`
+Secret name: `google-drive`
 
 Keys:
 - `GOOGLE_SERVICE_ACCOUNT_JSON` – full service account JSON
