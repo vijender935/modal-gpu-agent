@@ -5,7 +5,7 @@ Exposes image generation + GPU code execution to Grok / Claude / Cursor
 
 import os
 import httpx
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # Modal Endpoints
 IMAGE_ENDPOINT = os.getenv(
@@ -20,7 +20,7 @@ CODE_ENDPOINT = os.getenv(
 mcp = FastMCP("Modal GPU Agent")
 
 
-@mcp.tool()
+@mcp.tool
 async def generate_image(
     prompt: str,
     width: int = 1024,
@@ -53,7 +53,7 @@ async def generate_image(
     return f"✅ Image generated successfully for prompt: '{prompt}'\n\n(Image binary received. Next version will return a viewable URL.)"
 
 
-@mcp.tool()
+@mcp.tool
 async def run_gpu_code(
     code: str,
     requirements: list[str] = None
@@ -88,7 +88,7 @@ async def run_gpu_code(
     return "\n\n".join(output)
 
 
-@mcp.tool()
+@mcp.tool
 async def check_gpu() -> str:
     """Check if the Modal GPU is available and working."""
     code = """
