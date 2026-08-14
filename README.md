@@ -17,16 +17,17 @@ Repo → Settings → Secrets → Actions:
 
 ### 2. Google Drive secret (on Modal dashboard)
 
-Modal → Secrets → create **`google-drive`** with:
+Modal → Secrets → create or update **`google-drive`** with:
 
 | Key | Value |
 |-----|--------|
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Full service account JSON |
-| `INPUT_FOLDER_ID` | Shared Drive folder ID for input |
-| `OUTPUT_FOLDER_ID` | Shared Drive folder ID for output |
-| `DRIVE_ID` | Shared Drive ID (recommended) |
+| `GOOGLE_OAUTH_TOKEN_JSON` | Full contents of the user's OAuth `token.json` (preferred for My Drive) |
+| `INPUT_FOLDER_ID` | Drive folder ID for input |
+| `OUTPUT_FOLDER_ID` | Drive folder ID for output |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Optional service-account JSON fallback |
+| `DRIVE_ID` | Optional Shared Drive ID |
 
-Create `AI_Input` and `AI_Output` inside the same Google Shared Drive. Share both folders, or the Shared Drive itself, with the service-account email as **Content manager**. Set `DRIVE_ID` to the Shared Drive ID so the API searches the correct drive. A normal My Drive folder may still fail on upload because service accounts do not have personal storage quota.
+For the current `AI_Input` and `AI_Output` folders in My Drive, use `GOOGLE_OAUTH_TOKEN_JSON`. The application prefers OAuth user credentials when this key is present, so output files use the user's Drive quota. Keep the JSON only in the Modal secret; never commit it to GitHub. Shared Drive mode remains supported through the service account plus `DRIVE_ID`.
 
 ### 3. Deploy
 

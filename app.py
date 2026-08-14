@@ -38,15 +38,31 @@ model_volume = modal.Volume.from_name("gpu-agent-models", create_if_missing=True
 
 
 def _get_drive_service():
-    """Build Google Drive service from Modal secret."""
-    from google.oauth2 import service_account
+    """Build Google Drive service using OAuth user credentials or service account fallback."""
     from googleapiclient.discovery import build
 
-    sa_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
-    creds = service_account.Credentials.from_service_account_info(
-        sa_info,
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    oauth_json = os.environ.get("GOOGLE_OAUTH_TOKEN_JSON")
+
+    if oauth_json:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+
+        token_info = json.loads(oauth_json)
+        creds = Credentials.from_authorized_user_info(token_info, scopes=scopes)
+        if not creds.valid and creds.refresh_token:
+            creds.refresh(Request())
+        if not creds.valid:
+            raise RuntimeError("Google OAuth credentials are invalid or expired")
+    else:
+        from google.oauth2 import service_account
+
+        sa_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info,
+            scopes=scopes,
+        )
+
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 

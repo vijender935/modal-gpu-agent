@@ -28,12 +28,13 @@ URL: `https://YOUR-RENDER-URL/mcp`
 
 Secret name: `google-drive`
 
-Create `AI_Input` and `AI_Output` inside the same Google Shared Drive, then grant the service-account email access as **Content manager**.
+For normal My Drive folders, add the full contents of the user's OAuth `token.json` as `GOOGLE_OAUTH_TOKEN_JSON`. This is the preferred mode because output files use the user's Drive quota. Keep the token only in the Modal secret and never commit it to GitHub.
 
 Keys:
-- `GOOGLE_SERVICE_ACCOUNT_JSON` – full service account JSON
-- `INPUT_FOLDER_ID` – Shared Drive folder ID for input images
-- `OUTPUT_FOLDER_ID` – Shared Drive folder ID for output images
-- `DRIVE_ID` – Shared Drive ID; recommended so searches target the correct drive
+- `GOOGLE_OAUTH_TOKEN_JSON` – full OAuth authorized-user token JSON (preferred)
+- `INPUT_FOLDER_ID` – Drive folder ID for input images
+- `OUTPUT_FOLDER_ID` – Drive folder ID for output images
+- `GOOGLE_SERVICE_ACCOUNT_JSON` – optional fallback for Shared Drives
+- `DRIVE_ID` – optional Shared Drive ID
 
-The service account can read files from shared folders, but normal My Drive uploads can fail because service accounts do not have personal storage quota. The code uses `supportsAllDrives=true`, Shared Drive-aware listing, and pagination.
+If `GOOGLE_OAUTH_TOKEN_JSON` is present, the application uses it instead of the service account. Shared Drive mode remains supported with `supportsAllDrives=true`, Shared Drive-aware listing, and pagination.
