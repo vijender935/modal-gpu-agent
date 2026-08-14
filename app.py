@@ -6,6 +6,7 @@ Ready for MCP wrapping later
 import modal
 import io
 from pathlib import Path
+from paths import INPUT_PATH, OUTPUT_PATH
 
 # -----------------------------
 # Modal App + Image
@@ -177,5 +178,7 @@ def run_code_endpoint(item: dict):
 @app.local_entrypoint()
 def main():
     print("🚀 GPU Agent is ready.")
+    print(f"Input path: {INPUT_PATH}")
+    print(f"Output path: {OUTPUT_PATH}")
     print("Deploy with: modal deploy app.py")
     print("Then test the endpoints that Modal prints.")
