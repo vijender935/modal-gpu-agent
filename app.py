@@ -340,7 +340,6 @@ def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
         "MODAL_ENDPOINT_TOKEN",
         "GOOGLE_SERVICE_ACCOUNT_JSON",
         "GOOGLE_OAUTH_TOKEN_JSON",
-        "MCP_GATEWAY_TOKEN",
         "INPUT_FOLDER_ID",
         "OUTPUT_FOLDER_ID",
     }

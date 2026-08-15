@@ -50,50 +50,12 @@ def test_validate_prompt_is_bounded():
         server._validate_prompt("x" * (server.MAX_PROMPT_LENGTH + 1))
 
 
-def test_gateway_auth_middleware_fails_closed_without_token(monkeypatch):
-    middleware = server.BearerAuthMiddleware()
-    monkeypatch.delenv("ALLOW_INSECURE_DEV", raising=False)
+def test_health_does_not_require_gateway_token(monkeypatch):
     monkeypatch.delenv("MCP_GATEWAY_TOKEN", raising=False)
-    monkeypatch.setattr(server, "get_http_headers", dict)
-
-    async def call_next(_context):
-        return "ok"
-
-    with pytest.raises(server.McpError, match="not configured"):
-        asyncio.run(middleware.on_request(None, call_next))
-
-
-def test_gateway_auth_middleware_rejects_wrong_token(monkeypatch):
-    middleware = server.BearerAuthMiddleware()
-    monkeypatch.delenv("ALLOW_INSECURE_DEV", raising=False)
-    monkeypatch.setenv("MCP_GATEWAY_TOKEN", "expected-token")
-    monkeypatch.setattr(
-        server,
-        "get_http_headers",
-        lambda: {"authorization": "Bearer wrong-token"},
-    )
-
-    async def call_next(_context):
-        return "ok"
-
-    with pytest.raises(server.McpError, match="Unauthorized"):
-        asyncio.run(middleware.on_request(None, call_next))
-
-
-def test_gateway_auth_middleware_accepts_correct_token(monkeypatch):
-    middleware = server.BearerAuthMiddleware()
-    monkeypatch.delenv("ALLOW_INSECURE_DEV", raising=False)
-    monkeypatch.setenv("MCP_GATEWAY_TOKEN", "expected-token")
-    monkeypatch.setattr(
-        server,
-        "get_http_headers",
-        lambda: {"authorization": "Bearer expected-token"},
-    )
-
-    async def call_next(_context):
-        return "ok"
-
-    assert asyncio.run(middleware.on_request(None, call_next)) == "ok"
+    monkeypatch.setenv("MODAL_ENDPOINT_TOKEN", "test-token")
+    response = asyncio.run(server.health_check(None))
+    assert response.status_code == 200
+    assert b"mcp_gateway_token" not in response.body
 
 
 def test_rate_limit_middleware_rejects_burst_overflow():
@@ -122,8 +84,7 @@ def test_modal_auth_header_is_bearer(monkeypatch):
     assert server._modal_headers() == {"Authorization": "Bearer test-token"}
 
 
-def test_health_reports_degraded_when_required_tokens_are_missing(monkeypatch):
-    monkeypatch.delenv("MCP_GATEWAY_TOKEN", raising=False)
+def test_health_reports_degraded_when_modal_token_is_missing(monkeypatch):
     monkeypatch.delenv("MODAL_ENDPOINT_TOKEN", raising=False)
     response = asyncio.run(server.health_check(None))
     assert response.status_code == 503

@@ -1,15 +1,13 @@
 """
-Authenticated MCP gateway for the Modal GPU Agent.
+MCP gateway for the Modal GPU Agent.
 
-The gateway is intentionally fail-closed in production:
-- MCP_GATEWAY_TOKEN protects the public MCP endpoint.
+The public MCP gateway is connector-accessible without a gateway token.
 - MODAL_ENDPOINT_TOKEN authenticates calls to Modal web functions.
 - Arbitrary code execution is not exposed by this production service.
 """
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import time
@@ -18,13 +16,9 @@ from typing import Any
 
 import httpx
 from fastmcp import FastMCP
-from fastmcp.exceptions import McpError
-from fastmcp.server.dependencies import get_http_headers
-from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from fastmcp.utilities.types import Image
-from mcp.types import ErrorData
 from starlette.responses import JSONResponse
 
 IMAGE_ENDPOINT = os.getenv(
@@ -59,13 +53,6 @@ MAX_RETRIES = 2
 logger = logging.getLogger("modal-gpu-agent-mcp")
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _validate_dimensions(
     width: int,
     height: int,
@@ -92,35 +79,7 @@ def _validate_prompt(prompt: str) -> None:
         raise ValueError(f"prompt must be at most {MAX_PROMPT_LENGTH} characters")
 
 
-def _gateway_token() -> str | None:
-    return os.getenv("MCP_GATEWAY_TOKEN")
-
-
-class BearerAuthMiddleware(Middleware):
-    """Fail-closed bearer authentication for all MCP requests."""
-
-    async def on_request(self, context: MiddlewareContext, call_next):
-        if _env_flag("ALLOW_INSECURE_DEV"):
-            return await call_next(context)
-
-        expected = _gateway_token()
-        if not expected:
-            raise McpError(
-                ErrorData(code=-32001, message="MCP gateway authentication is not configured")
-            )
-
-        headers = get_http_headers()
-        authorization = headers.get("authorization", "")
-        scheme, _, provided = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not provided:
-            raise McpError(ErrorData(code=-32001, message="Unauthorized"))
-        if not hmac.compare_digest(provided, expected):
-            raise McpError(ErrorData(code=-32001, message="Unauthorized"))
-        return await call_next(context)
-
-
 mcp = FastMCP("Modal GPU Agent", strict_input_validation=True)
-mcp.add_middleware(BearerAuthMiddleware())
 mcp.add_middleware(
     RateLimitingMiddleware(
         max_requests_per_second=float(os.getenv("MCP_REQUESTS_PER_SECOND", "0.2")),
@@ -133,7 +92,6 @@ mcp.add_middleware(LoggingMiddleware(include_payloads=False))
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(_request):
     configured = {
-        "mcp_gateway_token": bool(_gateway_token()),
         "modal_endpoint_token": bool(os.getenv("MODAL_ENDPOINT_TOKEN")),
         "image_endpoint": bool(IMAGE_ENDPOINT),
         "gpu_endpoint": bool(GPU_ENDPOINT),
@@ -142,7 +100,7 @@ async def health_check(_request):
         "async_process_endpoint": bool(ASYNC_PROCESS_ENDPOINT),
         "status_endpoint": bool(STATUS_ENDPOINT),
     }
-    healthy = all(configured.values()) or _env_flag("ALLOW_INSECURE_DEV")
+    healthy = all(configured.values())
     return JSONResponse(
         {
             "status": "healthy" if healthy else "degraded",
