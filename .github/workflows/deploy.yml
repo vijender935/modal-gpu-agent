@@ -32,14 +32,14 @@ jobs:
 
       - name: Compile Python files
         working-directory: .
-        run: python -m compileall -q app.py paths.py mcp-server/server.py
+        run: python -m compileall -q app.py paths.py mcp-server/server.py scripts/staging_smoke_test.py
 
       - name: Run tests
         run: pytest -q tests
 
       - name: Run Ruff
         working-directory: .
-        run: ruff check app.py mcp-server/server.py mcp-server/tests
+        run: ruff check app.py mcp-server/server.py mcp-server/tests scripts
 
   deploy:
     name: Deploy GPU Agent

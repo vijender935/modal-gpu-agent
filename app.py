@@ -13,6 +13,8 @@ import resource
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
 import modal
@@ -25,6 +27,9 @@ logger = logging.getLogger(__name__)
 MAX_PROMPT_LENGTH = 2_000
 MAX_DRIVE_FILES = 500
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_IMAGE_PIXELS = 36_000_000
+MAX_IMAGE_SIDE = 8_192
+MAX_GENERATED_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_SANDBOX_CODE_LENGTH = 32_000
 MAX_SANDBOX_TIMEOUT = 120
 MAX_SANDBOX_OUTPUT_BYTES = 1_000_000
@@ -52,17 +57,45 @@ def _require_endpoint_auth(
         )
 
 
-def _validate_dimensions(width: int, height: int, *, max_side: int = 4096) -> None:
+def _validate_dimensions(
+    width: int,
+    height: int,
+    *,
+    max_side: int = 4096,
+    require_multiple: bool = True,
+) -> None:
     if isinstance(width, bool) or isinstance(height, bool):
         raise ValueError("width and height must be integers")
     if not isinstance(width, int) or not isinstance(height, int):
         raise ValueError("width and height must be integers")
     if not (256 <= width <= max_side and 256 <= height <= max_side):
         raise ValueError(f"width and height must be between 256 and {max_side}")
-    if width % 8 or height % 8:
+    if require_multiple and (width % 8 or height % 8):
         raise ValueError("width and height must be multiples of 8")
     if width * height > 16_000_000:
         raise ValueError("requested image is too large")
+
+
+def _new_request_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _log_request(request_id: str, operation: str, status_code: int, started_at: float) -> None:
+    logger.info(
+        "modal_request request_id=%s operation=%s status=%s duration_ms=%d",
+        request_id,
+        operation,
+        status_code,
+        round((time.monotonic() - started_at) * 1000),
+    )
+
+
+def _validate_image_array(img) -> None:
+    height, width = img.shape[:2]
+    if height <= 0 or width <= 0 or height > MAX_IMAGE_SIDE or width > MAX_IMAGE_SIDE:
+        raise ValueError("image dimensions exceed the allowed limit")
+    if height * width > MAX_IMAGE_PIXELS:
+        raise ValueError("image pixel count exceeds the allowed limit")
 
 
 def _validate_prompt(prompt: str) -> None:
@@ -413,6 +446,7 @@ def _smart_crop(img, target_w=1080, target_h=2340):
     """
     import cv2
     import numpy as np
+    _validate_image_array(img)
     h, w = img.shape[:2]
 
     model = _get_pose_model()
@@ -534,7 +568,13 @@ def _smart_crop(img, target_w=1080, target_h=2340):
 # -----------------------------
 # 2. GPU health check
 # -----------------------------
-@app.function(image=image, gpu="T4", timeout=3 * 60, scaledown_window=60)
+@app.function(
+    image=image,
+    gpu="T4",
+    timeout=3 * 60,
+    scaledown_window=60,
+    max_containers=2,
+)
 def check_gpu_status():
     import torch
 
@@ -557,6 +597,7 @@ def check_gpu_status():
     gpu="A10",
     timeout=10 * 60,
     scaledown_window=2 * 60,
+    max_containers=2,
     volumes={"/models": model_volume},
 )
 class ImageGenerator:
@@ -608,6 +649,7 @@ class ImageGenerator:
     gpu="T4",
     timeout=15 * 60,
     scaledown_window=60,
+    max_containers=1,
     volumes={"/models": model_volume},
     secrets=[modal.Secret.from_name("google-drive")],
 )
@@ -626,7 +668,7 @@ def process_drive_images(
     input_folder_id = os.environ["INPUT_FOLDER_ID"]
     output_folder_id = os.environ["OUTPUT_FOLDER_ID"]
 
-    _validate_dimensions(target_w, target_h)
+    _validate_dimensions(target_w, target_h, require_multiple=False)
     if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
         raise ValueError("file_id must be a non-empty string when provided")
 
@@ -686,6 +728,7 @@ def process_drive_images(
                     details.append({"file": name, "ok": False, "msg": "Failed to read image"})
                     failed_count += 1
                     continue
+                _validate_image_array(img)
 
                 ok, mode, cropped, msg = _smart_crop(img, target_w, target_h)
                 if not ok:
@@ -736,6 +779,8 @@ def generate_image_endpoint(
     _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
 ):
     _require_endpoint_auth(_credentials)
+    request_id = _new_request_id()
+    started_at = time.monotonic()
     prompt = item.get("prompt", "a beautiful landscape")
     width = item.get("width", 1024)
     height = item.get("height", 1024)
@@ -748,14 +793,22 @@ def generate_image_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    generator = ImageGenerator()
-    image_bytes = generator.generate.remote(
-        prompt=prompt, width=width, height=height, seed=seed
-    )
+    try:
+        generator = ImageGenerator()
+        image_bytes = generator.generate.remote(
+            prompt=prompt, width=width, height=height, seed=seed
+        )
+    except Exception as exc:
+        _log_request(request_id, "generate_image", 502, started_at)
+        raise HTTPException(status_code=502, detail=f"image generation failed; request_id={request_id}") from exc
+    if not image_bytes or len(image_bytes) > MAX_GENERATED_IMAGE_BYTES:
+        _log_request(request_id, "generate_image", 502, started_at)
+        raise HTTPException(status_code=502, detail=f"image output invalid; request_id={request_id}")
 
     from fastapi.responses import Response
 
-    return Response(content=image_bytes, media_type="image/png")
+    _log_request(request_id, "generate_image", 200, started_at)
+    return Response(content=image_bytes, media_type="image/png", headers={"X-Request-ID": request_id})
 
 
 
@@ -769,7 +822,17 @@ def check_gpu_endpoint(
     _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
 ):
     _require_endpoint_auth(_credentials)
-    return check_gpu_status.remote()
+    request_id = _new_request_id()
+    started_at = time.monotonic()
+    try:
+        result = check_gpu_status.remote()
+    except Exception as exc:
+        _log_request(request_id, "check_gpu", 502, started_at)
+        raise HTTPException(status_code=502, detail=f"GPU health check failed; request_id={request_id}") from exc
+    if isinstance(result, dict):
+        result = {**result, "request_id": request_id}
+    _log_request(request_id, "check_gpu", 200, started_at)
+    return result
 
 
 @app.function(
@@ -782,6 +845,8 @@ def run_python_sandbox_endpoint(
     _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
 ):
     _require_endpoint_auth(_credentials)
+    request_id = _new_request_id()
+    started_at = time.monotonic()
     code = item.get("code", "")
     timeout_seconds = item.get("timeout_seconds", 60)
     gpu = item.get("gpu", False)
@@ -805,7 +870,110 @@ def run_python_sandbox_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     runner = run_python_sandbox_gpu if gpu else run_python_sandbox_cpu
-    return runner.remote(code=code, timeout_seconds=timeout_seconds)
+    try:
+        result = runner.remote(code=code, timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        _log_request(request_id, "run_python", 502, started_at)
+        raise HTTPException(status_code=502, detail=f"sandbox execution failed; request_id={request_id}") from exc
+    if isinstance(result, dict):
+        result = {**result, "request_id": request_id}
+    _log_request(request_id, "run_python", 200, started_at)
+    return result
+
+
+@app.function(
+    image=image,
+    secrets=[
+        modal.Secret.from_name("google-drive"),
+        modal.Secret.from_name("modal-endpoint-auth"),
+    ],
+)
+@modal.fastapi_endpoint(method="GET")
+def service_health_endpoint(
+    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+):
+    _require_endpoint_auth(_credentials)
+    checks = {
+        "modal_endpoint_auth": bool(os.getenv("MODAL_ENDPOINT_TOKEN")),
+        "drive_folder_config": bool(os.getenv("INPUT_FOLDER_ID") and os.getenv("OUTPUT_FOLDER_ID")),
+        "drive_auth": "not_checked",
+    }
+    try:
+        service = _get_drive_service()
+        service.about().get(fields="user(emailAddress)").execute()
+        checks["drive_auth"] = "ok"
+    except Exception:
+        logger.exception("Drive health check failed")
+        checks["drive_auth"] = "error"
+    healthy = all(value in {True, "ok"} for value in checks.values())
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        {
+            "status": "healthy" if healthy else "degraded",
+            "service": "modal-gpu-agent",
+            "checks": checks,
+        },
+        status_code=200 if healthy else 503,
+    )
+
+
+@app.function(
+    image=image,
+    secrets=[
+        modal.Secret.from_name("google-drive"),
+        modal.Secret.from_name("modal-endpoint-auth"),
+    ],
+)
+@modal.fastapi_endpoint(method="POST")
+def process_drive_async_endpoint(
+    item: dict | None = None,
+    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+):
+    _require_endpoint_auth(_credentials)
+    item = item or {}
+    target_w = item.get("target_w", 1080)
+    target_h = item.get("target_h", 2340)
+    file_id = item.get("file_id")
+    force_reprocess = item.get("force_reprocess", False)
+    try:
+        _validate_dimensions(target_w, target_h, require_multiple=False)
+        if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
+            raise ValueError("file_id must be a non-empty string when provided")
+        if not isinstance(force_reprocess, bool):
+            raise ValueError("force_reprocess must be a boolean")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    call = process_drive_images.spawn(
+        target_w=target_w,
+        target_h=target_h,
+        file_id=file_id,
+        force_reprocess=force_reprocess,
+    )
+    return {"status": "queued", "job_id": call.object_id}
+
+
+@app.function(
+    image=image,
+    secrets=[modal.Secret.from_name("modal-endpoint-auth")],
+)
+@modal.fastapi_endpoint(method="GET")
+def process_drive_status_endpoint(
+    job_id: str,
+    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+):
+    _require_endpoint_auth(_credentials)
+    if not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 200:
+        raise HTTPException(status_code=422, detail="job_id is invalid")
+    try:
+        call = modal.FunctionCall.from_id(job_id)
+        result = call.get(timeout=0)
+    except TimeoutError:
+        return {"status": "running", "job_id": job_id}
+    except Exception as exc:
+        logger.exception("Drive job lookup failed for %s", job_id)
+        raise HTTPException(status_code=404, detail="job not found") from exc
+    return {"status": "succeeded", "job_id": job_id, "result": result}
 
 
 @app.function(
@@ -821,6 +989,8 @@ def process_drive_endpoint(
     _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
 ):
     _require_endpoint_auth(_credentials)
+    request_id = _new_request_id()
+    started_at = time.monotonic()
     item = item or {}
     target_w = item.get("target_w", 1080)
     target_h = item.get("target_h", 2340)
@@ -832,12 +1002,20 @@ def process_drive_endpoint(
             raise ValueError("force_reprocess must be a boolean")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return process_drive_images.remote(
-        target_w=target_w,
-        target_h=target_h,
-        file_id=file_id,
-        force_reprocess=force_reprocess,
-    )
+    try:
+        result = process_drive_images.remote(
+            target_w=target_w,
+            target_h=target_h,
+            file_id=file_id,
+            force_reprocess=force_reprocess,
+        )
+    except Exception as exc:
+        _log_request(request_id, "process_drive_images", 502, started_at)
+        raise HTTPException(status_code=502, detail=f"Drive processing failed; request_id={request_id}") from exc
+    if isinstance(result, dict):
+        result = {**result, "request_id": request_id}
+    _log_request(request_id, "process_drive_images", 200, started_at)
+    return result
 
 
 @app.local_entrypoint()

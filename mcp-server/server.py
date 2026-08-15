@@ -10,7 +10,10 @@ The gateway is intentionally fail-closed in production:
 from __future__ import annotations
 
 import hmac
+import logging
 import os
+import time
+import uuid
 from typing import Any
 
 import httpx
@@ -39,11 +42,20 @@ PROCESS_ENDPOINT = os.getenv(
     "PROCESS_ENDPOINT",
     "https://vijender935--gpu-agent-process-drive-endpoint.modal.run",
 )
+ASYNC_PROCESS_ENDPOINT = os.getenv(
+    "ASYNC_PROCESS_ENDPOINT",
+    "https://vijender935--gpu-agent-process-drive-async-endpoint.modal.run",
+)
+STATUS_ENDPOINT = os.getenv(
+    "STATUS_ENDPOINT",
+    "https://vijender935--gpu-agent-process-drive-status-endpoint.modal.run",
+)
 
 MAX_PROMPT_LENGTH = 2_000
 MAX_SANDBOX_CODE_LENGTH = 32_000
 MAX_SANDBOX_TIMEOUT = 120
 MAX_RETRIES = 2
+logger = logging.getLogger("modal-gpu-agent-mcp")
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -53,14 +65,20 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _validate_dimensions(width: int, height: int, *, max_side: int = 4096) -> None:
+def _validate_dimensions(
+    width: int,
+    height: int,
+    *,
+    max_side: int = 4096,
+    require_multiple: bool = True,
+) -> None:
     if isinstance(width, bool) or isinstance(height, bool):
         raise ValueError("width and height must be integers")
     if not isinstance(width, int) or not isinstance(height, int):
         raise ValueError("width and height must be integers")
     if not (256 <= width <= max_side and 256 <= height <= max_side):
         raise ValueError(f"width and height must be between 256 and {max_side}")
-    if width % 8 or height % 8:
+    if require_multiple and (width % 8 or height % 8):
         raise ValueError("width and height must be multiples of 8")
     if width * height > 16_000_000:
         raise ValueError("requested image is too large")
@@ -111,7 +129,25 @@ mcp.add_middleware(LoggingMiddleware(include_payloads=False))
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(_request):
-    return JSONResponse({"status": "healthy", "service": "modal-gpu-agent-mcp"})
+    configured = {
+        "mcp_gateway_token": bool(_gateway_token()),
+        "modal_endpoint_token": bool(os.getenv("MODAL_ENDPOINT_TOKEN")),
+        "image_endpoint": bool(IMAGE_ENDPOINT),
+        "gpu_endpoint": bool(GPU_ENDPOINT),
+        "sandbox_endpoint": bool(SANDBOX_ENDPOINT),
+        "process_endpoint": bool(PROCESS_ENDPOINT),
+        "async_process_endpoint": bool(ASYNC_PROCESS_ENDPOINT),
+        "status_endpoint": bool(STATUS_ENDPOINT),
+    }
+    healthy = all(configured.values()) or _env_flag("ALLOW_INSECURE_DEV")
+    return JSONResponse(
+        {
+            "status": "healthy" if healthy else "degraded",
+            "service": "modal-gpu-agent-mcp",
+            "configured": configured,
+        },
+        status_code=200 if healthy else 503,
+    )
 
 
 def _modal_headers() -> dict[str, str]:
@@ -128,6 +164,8 @@ async def _post(
     timeout: float,
 ) -> httpx.Response:
     last_error: Exception | None = None
+    request_id = uuid.uuid4().hex[:12]
+    started_at = time.monotonic()
     for attempt in range(MAX_RETRIES + 1):
         try:
             async with httpx.AsyncClient(
@@ -137,10 +175,53 @@ async def _post(
                 response = await client.post(
                     endpoint,
                     json=payload,
-                    headers=_modal_headers(),
+                    headers={**_modal_headers(), "X-Request-ID": request_id},
                 )
             if response.status_code in {502, 503, 504} and attempt < MAX_RETRIES:
                 continue
+            logger.info(
+                "downstream_request request_id=%s method=POST status=%s duration_ms=%d",
+                request_id,
+                response.status_code,
+                round((time.monotonic() - started_at) * 1000),
+            )
+            return response
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            last_error = exc
+            if attempt >= MAX_RETRIES:
+                break
+    logger.warning(
+        "downstream_request_failed request_id=%s duration_ms=%d error=%s",
+        request_id,
+        round((time.monotonic() - started_at) * 1000),
+        type(last_error).__name__,
+    )
+    raise RuntimeError(f"downstream request failed: {type(last_error).__name__}") from last_error
+
+
+async def _get(endpoint: str, *, timeout: float, params: dict[str, str]) -> httpx.Response:
+    last_error: Exception | None = None
+    request_id = uuid.uuid4().hex[:12]
+    started_at = time.monotonic()
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout),
+                follow_redirects=False,
+            ) as client:
+                response = await client.get(
+                    endpoint,
+                    params=params,
+                    headers={**_modal_headers(), "X-Request-ID": request_id},
+                )
+            if response.status_code in {502, 503, 504} and attempt < MAX_RETRIES:
+                continue
+            logger.info(
+                "downstream_request request_id=%s method=GET status=%s duration_ms=%d",
+                request_id,
+                response.status_code,
+                round((time.monotonic() - started_at) * 1000),
+            )
             return response
         except (httpx.TimeoutException, httpx.RequestError) as exc:
             last_error = exc
@@ -232,6 +313,57 @@ async def run_python(
 
 
 @mcp.tool
+async def start_drive_processing(
+    target_w: int = 1080,
+    target_h: int = 2340,
+    file_id: str | None = None,
+    force_reprocess: bool = False,
+) -> dict[str, Any] | str:
+    """Queue Drive processing and return a job ID for polling."""
+    try:
+        _validate_dimensions(target_w, target_h, require_multiple=False)
+        if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
+            raise ValueError("file_id must be a non-empty string when provided")
+        if not isinstance(force_reprocess, bool):
+            raise ValueError("force_reprocess must be a boolean")
+        response = await _post(
+            ASYNC_PROCESS_ENDPOINT,
+            {
+                "target_w": target_w,
+                "target_h": target_h,
+                "file_id": file_id,
+                "force_reprocess": force_reprocess,
+            },
+            timeout=30.0,
+        )
+    except (ValueError, RuntimeError) as exc:
+        return f"Error: {exc}"
+    if response.status_code != 200:
+        return _safe_error(response)
+    try:
+        return response.json()
+    except ValueError:
+        return "Error: async Drive endpoint returned invalid JSON"
+
+
+@mcp.tool
+async def get_drive_processing_status(job_id: str) -> dict[str, Any] | str:
+    """Poll a queued Drive processing job by its returned job ID."""
+    if not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 200:
+        return "Error: job_id is invalid"
+    try:
+        response = await _get(STATUS_ENDPOINT, timeout=30.0, params={"job_id": job_id})
+    except RuntimeError as exc:
+        return f"Error: {exc}"
+    if response.status_code != 200:
+        return _safe_error(response)
+    try:
+        return response.json()
+    except ValueError:
+        return "Error: Drive status endpoint returned invalid JSON"
+
+
+@mcp.tool
 async def process_images_from_drive(
     target_w: int = 1080,
     target_h: int = 2340,
@@ -240,8 +372,9 @@ async def process_images_from_drive(
 ) -> dict[str, Any] | str:
     """Process Drive images idempotently, optionally selecting one file or forcing reprocessing."""
     try:
-        _validate_dimensions(target_w, target_h)
+        _validate_dimensions(target_w, target_h, require_multiple=False)
         response = await _post(
+
             PROCESS_ENDPOINT,
             {
                 "target_w": target_w,

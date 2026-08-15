@@ -40,6 +40,19 @@ def test_modal_auth_header_is_bearer(monkeypatch):
     assert server._modal_headers() == {"Authorization": "Bearer test-token"}
 
 
+def test_health_reports_degraded_when_required_tokens_are_missing(monkeypatch):
+    monkeypatch.delenv("MCP_GATEWAY_TOKEN", raising=False)
+    monkeypatch.delenv("MODAL_ENDPOINT_TOKEN", raising=False)
+    response = asyncio.run(server.health_check(None))
+    assert response.status_code == 503
+
+
+def test_async_drive_tool_rejects_invalid_file_id():
+    result = asyncio.run(server.start_drive_processing.fn(file_id=""))
+    assert result.startswith("Error:")
+    assert "file_id" in result
+
+
 def test_safe_error_does_not_dump_large_body():
     response = httpx.Response(500, text="x" * 10_000)
     message = server._safe_error(response)
@@ -64,3 +77,27 @@ def test_generate_image_returns_image_content(monkeypatch):
     result = asyncio.run(server.generate_image.fn("a test", 1024, 1024))
     assert result.__class__.__name__ == "Image"
     assert result.data == b"fake-png"
+
+
+def test_post_includes_request_id_header(monkeypatch):
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, endpoint, json, headers):
+            seen.update(headers)
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setenv("MODAL_ENDPOINT_TOKEN", "test-token")
+    asyncio.run(server._post("https://example.test", {}, timeout=1))
+    assert seen["Authorization"] == "Bearer test-token"
+    assert len(seen["X-Request-ID"]) == 12

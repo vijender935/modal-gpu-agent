@@ -40,9 +40,12 @@ Or manually: `modal deploy app.py`
 - `...-generate-image-endpoint.modal.run`
 - `...-check-gpu-endpoint.modal.run`
 - `...-run-python-sandbox-endpoint.modal.run`
+- `...-service-health-endpoint.modal.run`
+- `...-process-drive-async-endpoint.modal.run`
+- `...-process-drive-status-endpoint.modal.run`
 - `...-process-drive-endpoint.modal.run`
 
-The old unrestricted code endpoint has been replaced by an isolated sandbox endpoint. It runs only preinstalled packages, blocks network access, receives no Drive/OAuth secrets, and enforces a 120-second timeout, bounded output, bounded files, and single-use containers. All Modal endpoints require `Authorization: Bearer <MODAL_ENDPOINT_TOKEN>`. Create a Modal secret named **`modal-endpoint-auth`** containing `MODAL_ENDPOINT_TOKEN`. The MCP gateway must use the same token in its `MODAL_ENDPOINT_TOKEN` environment variable.
+The old unrestricted code endpoint has been replaced by an isolated sandbox endpoint. It runs only preinstalled packages, blocks network access, receives no Drive/OAuth secrets, and enforces a 120-second timeout, bounded output, bounded files, and single-use containers. All Modal endpoints require `Authorization: Bearer <MODAL_ENDPOINT_TOKEN>`. Create a Modal secret named **`modal-endpoint-auth`** containing `MODAL_ENDPOINT_TOKEN`. The MCP gateway must use the same token in its `MODAL_ENDPOINT_TOKEN` environment variable. The authenticated service-health endpoint checks endpoint configuration and Drive OAuth health without exposing secret values.
 
 ## MCP (Render)
 
@@ -53,4 +56,8 @@ See `mcp-server/README.md`. The Render service requires `MCP_GATEWAY_TOKEN`; con
 - "Check if GPU is working"
 - "Generate an image of a cyberpunk city"
 - "Run Python: check torch CUDA availability" (sandboxed, preinstalled packages only)
+- "Start Drive processing and return a job ID"
+- "Check Drive job status: <job ID>"
 - "Process images from Drive" / "Run smart crop on AI_Input"
+
+For large Drive batches, use the asynchronous start/status tools rather than holding one HTTP request open. Each endpoint response includes a request ID for log correlation. Before merging a production change, run a staging smoke test in this order: service health, wrong-token rejection, GPU health, small image generation, sandbox CPU/GPU execution, then one-image Drive processing.
