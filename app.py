@@ -37,11 +37,12 @@ MAX_SANDBOX_FILE_BYTES = 2_000_000
 MAX_SANDBOX_TOTAL_FILE_BYTES = 10_000_000
 MAX_SANDBOX_FILES = 10
 endpoint_bearer = HTTPBearer(auto_error=False)
+endpoint_auth_dependency = Depends(endpoint_bearer)
 _pose_model = None
 
 
 def _require_endpoint_auth(
-    credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ) -> None:
     expected = os.getenv("MODAL_ENDPOINT_TOKEN")
     if not expected:
@@ -65,9 +66,9 @@ def _validate_dimensions(
     require_multiple: bool = True,
 ) -> None:
     if isinstance(width, bool) or isinstance(height, bool):
-        raise ValueError("width and height must be integers")
+        raise TypeError("width and height must be integers")
     if not isinstance(width, int) or not isinstance(height, int):
-        raise ValueError("width and height must be integers")
+        raise TypeError("width and height must be integers")
     if not (256 <= width <= max_side and 256 <= height <= max_side):
         raise ValueError(f"width and height must be between 256 and {max_side}")
     if require_multiple and (width % 8 or height % 8):
@@ -329,7 +330,7 @@ def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
     if len(code) > MAX_SANDBOX_CODE_LENGTH:
         raise ValueError(f"code must be at most {MAX_SANDBOX_CODE_LENGTH} characters")
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
-        raise ValueError("timeout_seconds must be an integer")
+        raise TypeError("timeout_seconds must be an integer")
     if not 1 <= timeout_seconds <= MAX_SANDBOX_TIMEOUT:
         raise ValueError(f"timeout_seconds must be between 1 and {MAX_SANDBOX_TIMEOUT}")
 
@@ -365,7 +366,7 @@ def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
-                preexec_fn=_sandbox_preexec,
+                preexec_fn=_sandbox_preexec,  # noqa: PLW1509
             )
             try:
                 process.wait(timeout=timeout_seconds)
@@ -421,6 +422,7 @@ def _get_pose_model():
         return _pose_model
 
     import shutil
+
     from ultralytics import YOLO
 
     model_path = Path(os.getenv("YOLO_MODEL_PATH", "/models/yolov8n-pose.pt"))
@@ -619,7 +621,7 @@ class ImageGenerator:
         width: int = 1024,
         height: int = 1024,
         num_inference_steps: int = 4,
-        seed: int = None,
+        seed: int | None = None,
     ) -> bytes:
         import torch
 
@@ -776,7 +778,7 @@ def process_drive_images(
 @modal.fastapi_endpoint(method="POST")
 def generate_image_endpoint(
     item: dict,
-    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ):
     _require_endpoint_auth(_credentials)
     request_id = _new_request_id()
@@ -819,7 +821,7 @@ def generate_image_endpoint(
 @modal.fastapi_endpoint(method="POST")
 def check_gpu_endpoint(
     _item: dict | None = None,
-    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ):
     _require_endpoint_auth(_credentials)
     request_id = _new_request_id()
@@ -842,7 +844,7 @@ def check_gpu_endpoint(
 @modal.fastapi_endpoint(method="POST")
 def run_python_sandbox_endpoint(
     item: dict,
-    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ):
     _require_endpoint_auth(_credentials)
     request_id = _new_request_id()
@@ -864,7 +866,7 @@ def run_python_sandbox_endpoint(
         if len(code) > MAX_SANDBOX_CODE_LENGTH:
             raise ValueError(f"code must be at most {MAX_SANDBOX_CODE_LENGTH} characters")
         if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
-            raise ValueError("timeout_seconds must be an integer")
+            raise TypeError("timeout_seconds must be an integer")
         if not 1 <= timeout_seconds <= MAX_SANDBOX_TIMEOUT:
             raise ValueError(f"timeout_seconds must be between 1 and {MAX_SANDBOX_TIMEOUT}")
     except ValueError as exc:
@@ -890,7 +892,7 @@ def run_python_sandbox_endpoint(
 )
 @modal.fastapi_endpoint(method="GET")
 def service_health_endpoint(
-    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ):
     _require_endpoint_auth(_credentials)
     checks = {
@@ -928,7 +930,7 @@ def service_health_endpoint(
 @modal.fastapi_endpoint(method="POST")
 def process_drive_async_endpoint(
     item: dict | None = None,
-    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ):
     _require_endpoint_auth(_credentials)
     item = item or {}
@@ -941,8 +943,8 @@ def process_drive_async_endpoint(
         if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
             raise ValueError("file_id must be a non-empty string when provided")
         if not isinstance(force_reprocess, bool):
-            raise ValueError("force_reprocess must be a boolean")
-    except ValueError as exc:
+            raise TypeError("force_reprocess must be a boolean")
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     call = process_drive_images.spawn(
         target_w=target_w,
@@ -960,7 +962,7 @@ def process_drive_async_endpoint(
 @modal.fastapi_endpoint(method="GET")
 def process_drive_status_endpoint(
     job_id: str,
-    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ):
     _require_endpoint_auth(_credentials)
     if not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 200:
@@ -986,7 +988,7 @@ def process_drive_status_endpoint(
 @modal.fastapi_endpoint(method="POST")
 def process_drive_endpoint(
     item: dict | None = None,
-    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
 ):
     _require_endpoint_auth(_credentials)
     request_id = _new_request_id()
@@ -997,10 +999,10 @@ def process_drive_endpoint(
     file_id = item.get("file_id")
     force_reprocess = item.get("force_reprocess", False)
     try:
-        _validate_dimensions(target_w, target_h)
+        _validate_dimensions(target_w, target_h, require_multiple=False)
         if not isinstance(force_reprocess, bool):
-            raise ValueError("force_reprocess must be a boolean")
-    except ValueError as exc:
+            raise TypeError("force_reprocess must be a boolean")
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         result = process_drive_images.remote(

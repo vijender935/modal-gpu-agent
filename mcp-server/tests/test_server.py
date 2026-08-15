@@ -6,7 +6,21 @@ import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-import server  # noqa: E402
+import server
+
+
+async def _invoke_tool(tool, **arguments):
+    function = getattr(tool, "fn", None) or getattr(tool, "__wrapped__", None)
+    if function is not None:
+        return await function(**arguments)
+    result = await tool.run(arguments)
+    structured = getattr(result, "structured_content", None)
+    if structured:
+        return structured
+    content = getattr(result, "content", None)
+    if content and hasattr(content[0], "text"):
+        return content[0].text
+    return result
 
 
 def test_validate_dimensions_rejects_unsafe_values():
@@ -48,7 +62,7 @@ def test_health_reports_degraded_when_required_tokens_are_missing(monkeypatch):
 
 
 def test_async_drive_tool_rejects_invalid_file_id():
-    result = asyncio.run(server.start_drive_processing.fn(file_id=""))
+    result = asyncio.run(_invoke_tool(server.start_drive_processing, file_id=""))
     assert result.startswith("Error:")
     assert "file_id" in result
 
@@ -74,7 +88,9 @@ def test_generate_image_returns_image_content(monkeypatch):
 
     monkeypatch.setattr(server, "_post", fake_post)
     monkeypatch.setenv("MODAL_ENDPOINT_TOKEN", "test-token")
-    result = asyncio.run(server.generate_image.fn("a test", 1024, 1024))
+    result = asyncio.run(
+        _invoke_tool(server.generate_image, prompt="a test", width=1024, height=1024)
+    )
     assert result.__class__.__name__ == "Image"
     assert result.data == b"fake-png"
 

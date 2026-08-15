@@ -19,11 +19,11 @@ from typing import Any
 import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import McpError
-from fastmcp.utilities.types import Image
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
+from fastmcp.utilities.types import Image
 from starlette.responses import JSONResponse
 
 IMAGE_ENDPOINT = os.getenv(
@@ -73,9 +73,9 @@ def _validate_dimensions(
     require_multiple: bool = True,
 ) -> None:
     if isinstance(width, bool) or isinstance(height, bool):
-        raise ValueError("width and height must be integers")
+        raise TypeError("width and height must be integers")
     if not isinstance(width, int) or not isinstance(height, int):
-        raise ValueError("width and height must be integers")
+        raise TypeError("width and height must be integers")
     if not (256 <= width <= max_side and 256 <= height <= max_side):
         raise ValueError(f"width and height must be between 256 and {max_side}")
     if require_multiple and (width % 8 or height % 8):
@@ -325,7 +325,7 @@ async def start_drive_processing(
         if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
             raise ValueError("file_id must be a non-empty string when provided")
         if not isinstance(force_reprocess, bool):
-            raise ValueError("force_reprocess must be a boolean")
+            raise TypeError("force_reprocess must be a boolean")
         response = await _post(
             ASYNC_PROCESS_ENDPOINT,
             {
@@ -336,7 +336,7 @@ async def start_drive_processing(
             },
             timeout=30.0,
         )
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, TypeError, RuntimeError) as exc:
         return f"Error: {exc}"
     if response.status_code != 200:
         return _safe_error(response)
@@ -384,7 +384,7 @@ async def process_images_from_drive(
             },
             timeout=900.0,
         )
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, TypeError, RuntimeError) as exc:
         return f"Error: {exc}"
     if response.status_code != 200:
         return _safe_error(response)
@@ -399,6 +399,6 @@ async def process_images_from_drive(
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", "8000"))
     print(f"Starting Modal GPU Agent MCP Server on port {port}")
     mcp.run(transport="http", host="0.0.0.0", port=port)
