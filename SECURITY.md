@@ -8,7 +8,7 @@ Google Drive credentials must remain in the Modal secret `google-drive`. OAuth u
 
 ## Arbitrary code execution
 
-The production application does not expose arbitrary Python execution. A future code runner must be deployed as a separate sandbox with an isolated identity, no application secrets, restricted network access, an explicit package allowlist, resource quotas, and audit logging.
+General-purpose Python is available only through the separate `run_python` sandbox endpoint. The sandbox uses a single-use Modal container with blocked network access, restricted Modal access, no Drive/OAuth secrets, bounded CPU/GPU time, bounded output and files, and a prebuilt package set. Dynamic package installation is disabled. These controls reduce risk but do not make arbitrary code harmless; keep the endpoint authenticated, rate-limited, and monitored.
 
 ## Reporting
 

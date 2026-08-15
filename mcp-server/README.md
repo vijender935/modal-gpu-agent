@@ -6,9 +6,10 @@ Control Modal GPU functions from Grok.
 
 - `generate_image` – Flux image generation with an MCP image artifact response
 - `check_gpu` – CUDA / GPU health check without user-provided code
+- `run_python` – general-purpose Python in an isolated, network-blocked CPU/GPU sandbox
 - `process_images_from_drive` – YOLO smart-crop all images from Drive AI_Input → AI_Output
 
-Arbitrary Python execution is intentionally not exposed in the production MCP server. If that capability is ever needed, it must be implemented as a separate sandboxed service with its own identity, network policy, package policy, and cost quota.
+`run_python` uses packages already installed in the Modal image; dynamic package installation is intentionally disabled. It accepts a maximum 32,000-character program and a timeout from 1 to 120 seconds. The sandbox receives no Drive/OAuth credentials, blocks network access, uses a single-use container, and returns bounded stdout/stderr plus at most ten generated files.
 
 ## Deploy on Render
 
@@ -22,6 +23,7 @@ Arbitrary Python execution is intentionally not exposed in the production MCP se
 6. Optional endpoint overrides:
    - `IMAGE_ENDPOINT`
    - `GPU_ENDPOINT`
+   - `SANDBOX_ENDPOINT`
    - `PROCESS_ENDPOINT`
 
 Health check: `GET https://YOUR-RENDER-URL/health`.

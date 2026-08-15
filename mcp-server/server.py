@@ -31,12 +31,18 @@ GPU_ENDPOINT = os.getenv(
     "GPU_ENDPOINT",
     "https://vijender935--gpu-agent-check-gpu-endpoint.modal.run",
 )
+SANDBOX_ENDPOINT = os.getenv(
+    "SANDBOX_ENDPOINT",
+    "https://vijender935--gpu-agent-run-python-sandbox-endpoint.modal.run",
+)
 PROCESS_ENDPOINT = os.getenv(
     "PROCESS_ENDPOINT",
     "https://vijender935--gpu-agent-process-drive-endpoint.modal.run",
 )
 
 MAX_PROMPT_LENGTH = 2_000
+MAX_SANDBOX_CODE_LENGTH = 32_000
+MAX_SANDBOX_TIMEOUT = 120
 MAX_RETRIES = 2
 
 
@@ -190,6 +196,39 @@ async def check_gpu() -> dict[str, Any] | str:
     except ValueError:
         return "Error: GPU health endpoint returned invalid JSON"
 
+
+
+@mcp.tool
+async def run_python(
+    code: str,
+    gpu: bool = False,
+    timeout_seconds: int = 60,
+) -> dict[str, Any] | str:
+    """Run preinstalled Python packages in an isolated, network-blocked sandbox."""
+    if not isinstance(code, str) or not code.strip():
+        return "Error: code must be a non-empty string"
+    if len(code) > MAX_SANDBOX_CODE_LENGTH:
+        return f"Error: code must be at most {MAX_SANDBOX_CODE_LENGTH} characters"
+    if not isinstance(gpu, bool):
+        return "Error: gpu must be a boolean"
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
+        return "Error: timeout_seconds must be an integer"
+    if not 1 <= timeout_seconds <= MAX_SANDBOX_TIMEOUT:
+        return f"Error: timeout_seconds must be between 1 and {MAX_SANDBOX_TIMEOUT}"
+    try:
+        response = await _post(
+            SANDBOX_ENDPOINT,
+            {"code": code, "gpu": gpu, "timeout_seconds": timeout_seconds},
+            timeout=MAX_SANDBOX_TIMEOUT + 30.0,
+        )
+    except RuntimeError as exc:
+        return f"Error: {exc}"
+    if response.status_code != 200:
+        return _safe_error(response)
+    try:
+        return response.json()
+    except ValueError:
+        return "Error: sandbox endpoint returned invalid JSON"
 
 
 @mcp.tool

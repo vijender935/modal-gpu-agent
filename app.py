@@ -2,11 +2,16 @@
 Modal GPU Agent - Image Generation + Drive Processing + General GPU Compute
 """
 
+import base64
 import hmac
 import io
 import json
 import logging
+import mimetypes
 import os
+import resource
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -20,6 +25,12 @@ logger = logging.getLogger(__name__)
 MAX_PROMPT_LENGTH = 2_000
 MAX_DRIVE_FILES = 500
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_SANDBOX_CODE_LENGTH = 32_000
+MAX_SANDBOX_TIMEOUT = 120
+MAX_SANDBOX_OUTPUT_BYTES = 1_000_000
+MAX_SANDBOX_FILE_BYTES = 2_000_000
+MAX_SANDBOX_TOTAL_FILE_BYTES = 10_000_000
+MAX_SANDBOX_FILES = 10
 endpoint_bearer = HTTPBearer(auto_error=False)
 _pose_model = None
 
@@ -231,6 +242,144 @@ def _upload_file(service, local_path: str, folder_id: str, filename: str):
             .execute()
         )
         return created["id"]
+
+
+def _sandbox_preexec():
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_SANDBOX_OUTPUT_BYTES, MAX_SANDBOX_OUTPUT_BYTES))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
+    try:
+        resource.setrlimit(resource.RLIMIT_NPROC, (128, 128))
+    except (ValueError, OSError):
+        pass
+
+
+def _read_bounded_text(path: Path, limit: int = MAX_SANDBOX_OUTPUT_BYTES) -> str:
+    with path.open("rb") as handle:
+        data = handle.read(limit + 1)
+    suffix = "\n[output truncated]" if len(data) > limit else ""
+    return data[:limit].decode("utf-8", errors="replace") + suffix
+
+
+def _collect_sandbox_files(workdir: Path) -> list[dict]:
+    results = []
+    total_bytes = 0
+    ignored = {"main.py", "stdout.txt", "stderr.txt"}
+    for path in sorted(workdir.rglob("*")):
+        if len(results) >= MAX_SANDBOX_FILES or total_bytes >= MAX_SANDBOX_TOTAL_FILE_BYTES:
+            break
+        if not path.is_file() or path.is_symlink() or path.name in ignored:
+            continue
+        relative = path.relative_to(workdir)
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        size = path.stat().st_size
+        if size > MAX_SANDBOX_FILE_BYTES:
+            continue
+        remaining = MAX_SANDBOX_TOTAL_FILE_BYTES - total_bytes
+        data = path.read_bytes()[: min(size, remaining)]
+        total_bytes += len(data)
+        results.append(
+            {
+                "path": str(relative),
+                "mime_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                "size": len(data),
+                "data_base64": base64.b64encode(data).decode("ascii"),
+                "truncated": len(data) != size,
+            }
+        )
+    return results
+
+
+def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("code must be a non-empty string")
+    if len(code) > MAX_SANDBOX_CODE_LENGTH:
+        raise ValueError(f"code must be at most {MAX_SANDBOX_CODE_LENGTH} characters")
+    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
+        raise ValueError("timeout_seconds must be an integer")
+    if not 1 <= timeout_seconds <= MAX_SANDBOX_TIMEOUT:
+        raise ValueError(f"timeout_seconds must be between 1 and {MAX_SANDBOX_TIMEOUT}")
+
+    secret_names = {
+        "MODAL_TOKEN_ID",
+        "MODAL_TOKEN_SECRET",
+        "MODAL_ENDPOINT_TOKEN",
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_OAUTH_TOKEN_JSON",
+        "MCP_GATEWAY_TOKEN",
+        "INPUT_FOLDER_ID",
+        "OUTPUT_FOLDER_ID",
+    }
+    safe_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in secret_names and not key.endswith("_SECRET") and not key.endswith("_TOKEN")
+    }
+    safe_env.update({"PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1"})
+
+    with tempfile.TemporaryDirectory(prefix="modal-sandbox-") as tempdir:
+        workdir = Path(tempdir)
+        (workdir / "main.py").write_text(code, encoding="utf-8")
+        stdout_path = workdir / "stdout.txt"
+        stderr_path = workdir / "stderr.txt"
+        process = None
+        timed_out = False
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            process = subprocess.Popen(
+                [sys.executable, "-I", "main.py"],
+                cwd=workdir,
+                env=safe_env,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                preexec_fn=_sandbox_preexec,
+            )
+            try:
+                process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                process.kill()
+                process.wait(timeout=5)
+
+        return {
+            "success": not timed_out and process.returncode == 0,
+            "returncode": -9 if timed_out else process.returncode,
+            "timed_out": timed_out,
+            "stdout": _read_bounded_text(stdout_path),
+            "stderr": _read_bounded_text(stderr_path),
+            "files": _collect_sandbox_files(workdir),
+        }
+
+
+@app.function(
+    image=image,
+    cpu=2,
+    memory=4096,
+    ephemeral_disk=2048,
+    timeout=MAX_SANDBOX_TIMEOUT + 30,
+    block_network=True,
+    restrict_modal_access=True,
+    single_use_containers=True,
+    max_containers=10,
+)
+def run_python_sandbox_cpu(code: str, timeout_seconds: int = 60):
+    return _execute_python_sandbox(code, timeout_seconds)
+
+
+@app.function(
+    image=image,
+    gpu="T4",
+    cpu=2,
+    memory=8192,
+    ephemeral_disk=4096,
+    timeout=MAX_SANDBOX_TIMEOUT + 30,
+    block_network=True,
+    restrict_modal_access=True,
+    single_use_containers=True,
+    max_containers=10,
+)
+def run_python_sandbox_gpu(code: str, timeout_seconds: int = 60):
+    return _execute_python_sandbox(code, timeout_seconds)
 
 
 def _get_pose_model():
@@ -621,6 +770,42 @@ def check_gpu_endpoint(
 ):
     _require_endpoint_auth(_credentials)
     return check_gpu_status.remote()
+
+
+@app.function(
+    image=image,
+    secrets=[modal.Secret.from_name("modal-endpoint-auth")],
+)
+@modal.fastapi_endpoint(method="POST")
+def run_python_sandbox_endpoint(
+    item: dict,
+    _credentials: HTTPAuthorizationCredentials | None = Depends(endpoint_bearer),
+):
+    _require_endpoint_auth(_credentials)
+    code = item.get("code", "")
+    timeout_seconds = item.get("timeout_seconds", 60)
+    gpu = item.get("gpu", False)
+    requirements = item.get("requirements", [])
+    if requirements:
+        raise HTTPException(
+            status_code=422,
+            detail="Dynamic package installation is disabled; use the prebuilt sandbox image",
+        )
+    if not isinstance(gpu, bool):
+        raise HTTPException(status_code=422, detail="gpu must be a boolean")
+    try:
+        if not isinstance(code, str) or not code.strip():
+            raise ValueError("code must be a non-empty string")
+        if len(code) > MAX_SANDBOX_CODE_LENGTH:
+            raise ValueError(f"code must be at most {MAX_SANDBOX_CODE_LENGTH} characters")
+        if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
+            raise ValueError("timeout_seconds must be an integer")
+        if not 1 <= timeout_seconds <= MAX_SANDBOX_TIMEOUT:
+            raise ValueError(f"timeout_seconds must be between 1 and {MAX_SANDBOX_TIMEOUT}")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    runner = run_python_sandbox_gpu if gpu else run_python_sandbox_cpu
+    return runner.remote(code=code, timeout_seconds=timeout_seconds)
 
 
 @app.function(
