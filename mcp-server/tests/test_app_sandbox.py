@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
-import app  # noqa: E402
+import app
 
 
 def test_sandbox_runs_code_and_returns_files():

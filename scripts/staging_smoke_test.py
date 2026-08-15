@@ -20,7 +20,6 @@ from pathlib import Path
 import httpx
 
 
-
 def require(name: str) -> str:
     value = os.getenv(name)
     if not value:
