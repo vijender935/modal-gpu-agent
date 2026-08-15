@@ -340,7 +340,6 @@ def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
         "MODAL_ENDPOINT_TOKEN",
         "GOOGLE_SERVICE_ACCOUNT_JSON",
         "GOOGLE_OAUTH_TOKEN_JSON",
-        "MCP_GATEWAY_TOKEN",
         "INPUT_FOLDER_ID",
         "OUTPUT_FOLDER_ID",
     }
@@ -998,6 +997,8 @@ def process_drive_endpoint(
     force_reprocess = item.get("force_reprocess", False)
     try:
         _validate_dimensions(target_w, target_h, require_multiple=False)
+        if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
+            raise ValueError("file_id must be a non-empty string when provided")
         if not isinstance(force_reprocess, bool):
             raise TypeError("force_reprocess must be a boolean")
     except (ValueError, TypeError) as exc:

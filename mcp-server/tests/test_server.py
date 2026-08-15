@@ -5,6 +5,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastmcp.server.middleware.rate_limiting import (
+    RateLimitError,
+    RateLimitingMiddleware,
+)
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import server
@@ -46,6 +50,29 @@ def test_validate_prompt_is_bounded():
         server._validate_prompt("x" * (server.MAX_PROMPT_LENGTH + 1))
 
 
+def test_health_does_not_require_gateway_token(monkeypatch):
+    monkeypatch.delenv("MCP_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setenv("MODAL_ENDPOINT_TOKEN", "test-token")
+    response = asyncio.run(server.health_check(None))
+    assert response.status_code == 200
+    assert b"mcp_gateway_token" not in response.body
+
+
+def test_rate_limit_middleware_rejects_burst_overflow():
+    middleware = RateLimitingMiddleware(
+        max_requests_per_second=0.01,
+        burst_capacity=1,
+        global_limit=True,
+    )
+
+    async def call_next(_context):
+        return "ok"
+
+    assert asyncio.run(middleware.on_request(None, call_next)) == "ok"
+    with pytest.raises(RateLimitError, match="Global rate limit exceeded"):
+        asyncio.run(middleware.on_request(None, call_next))
+
+
 def test_modal_auth_is_fail_closed(monkeypatch):
     monkeypatch.delenv("MODAL_ENDPOINT_TOKEN", raising=False)
     with pytest.raises(RuntimeError):
@@ -57,8 +84,7 @@ def test_modal_auth_header_is_bearer(monkeypatch):
     assert server._modal_headers() == {"Authorization": "Bearer test-token"}
 
 
-def test_health_reports_degraded_when_required_tokens_are_missing(monkeypatch):
-    monkeypatch.delenv("MCP_GATEWAY_TOKEN", raising=False)
+def test_health_reports_degraded_when_modal_token_is_missing(monkeypatch):
     monkeypatch.delenv("MODAL_ENDPOINT_TOKEN", raising=False)
     response = asyncio.run(server.health_check(None))
     assert response.status_code == 503
@@ -68,6 +94,17 @@ def test_async_drive_tool_rejects_invalid_file_id():
     result = asyncio.run(_invoke_tool(server.start_drive_processing, file_id=""))
     assert result.startswith("Error:")
     assert "file_id" in result
+
+
+def test_sync_drive_tool_rejects_invalid_inputs():
+    invalid_file_id = asyncio.run(_invoke_tool(server.process_images_from_drive, file_id=""))
+    invalid_force = asyncio.run(
+        _invoke_tool(server.process_images_from_drive, force_reprocess="yes")
+    )
+    assert invalid_file_id.startswith("Error:")
+    assert "file_id" in invalid_file_id
+    assert invalid_force.startswith("Error:")
+    assert "force_reprocess" in invalid_force
 
 
 def test_safe_error_does_not_dump_large_body():

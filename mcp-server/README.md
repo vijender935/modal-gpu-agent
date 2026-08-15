@@ -22,8 +22,7 @@ For larger Drive batches, call `start_drive_processing` and then poll `get_drive
 3. Build: `pip install -r requirements.txt`.
 4. Start: `python server.py`.
 5. Required environment variables:
-   - `MCP_GATEWAY_TOKEN` – long random bearer token required by MCP clients.
-   - `MODAL_ENDPOINT_TOKEN` – same token stored in the Modal `modal-endpoint-auth` secret.
+   - `MODAL_ENDPOINT_TOKEN` – token stored in the Modal `modal-endpoint-auth` secret; it protects calls from the gateway to Modal web functions.
 6. Optional endpoint overrides:
    - `IMAGE_ENDPOINT`
    - `GPU_ENDPOINT`
@@ -32,13 +31,13 @@ For larger Drive batches, call `start_drive_processing` and then poll `get_drive
    - `ASYNC_PROCESS_ENDPOINT`
    - `STATUS_ENDPOINT`
 
-Health check: `GET https://YOUR-RENDER-URL/health`. The response reports whether required gateway tokens and endpoint URLs are configured without revealing secret values. For a pre-merge live test, use temporary staging tokens and run `python scripts/staging_smoke_test.py` with the Modal endpoint URLs; the script checks health, GPU, sandbox, image generation, and optional async Drive submission. For production, rotate `MCP_GATEWAY_TOKEN` and `MODAL_ENDPOINT_TOKEN` independently, update both matching deployment locations, and verify wrong-token rejection before enabling client traffic.
+Health check: `GET https://YOUR-RENDER-URL/health`. The response reports whether the Modal endpoint token and endpoint URLs are configured without revealing secret values. For a pre-merge live test, use a temporary staging token and run `python scripts/staging_smoke_test.py` with the Modal endpoint URLs; the script checks wrong-token rejection, health, GPU, sandbox, image generation, and optional async Drive submission. The public MCP gateway is connector-accessible without an Authorization header, while calls from the gateway to Modal remain bearer-protected.
 
 ## Grok connector
 
 URL: `https://YOUR-RENDER-URL/mcp`
 
-Configure the connector with the header `Authorization: Bearer <MCP_GATEWAY_TOKEN>`. Never put the token in the URL or commit it to GitHub.
+Configure the connector with the MCP URL only; no Authorization header is required at the gateway. The gateway still authenticates every downstream Modal request with `MODAL_ENDPOINT_TOKEN`, which must remain in the Modal secret and never be committed to GitHub.
 
 ## Modal secret required
 
