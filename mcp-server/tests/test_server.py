@@ -5,6 +5,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastmcp.server.middleware.rate_limiting import (
+    RateLimitError,
+    RateLimitingMiddleware,
+)
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import server
@@ -46,6 +50,67 @@ def test_validate_prompt_is_bounded():
         server._validate_prompt("x" * (server.MAX_PROMPT_LENGTH + 1))
 
 
+def test_gateway_auth_middleware_fails_closed_without_token(monkeypatch):
+    middleware = server.BearerAuthMiddleware()
+    monkeypatch.delenv("ALLOW_INSECURE_DEV", raising=False)
+    monkeypatch.delenv("MCP_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setattr(server, "get_http_headers", dict)
+
+    async def call_next(_context):
+        return "ok"
+
+    with pytest.raises(server.McpError, match="not configured"):
+        asyncio.run(middleware.on_request(None, call_next))
+
+
+def test_gateway_auth_middleware_rejects_wrong_token(monkeypatch):
+    middleware = server.BearerAuthMiddleware()
+    monkeypatch.delenv("ALLOW_INSECURE_DEV", raising=False)
+    monkeypatch.setenv("MCP_GATEWAY_TOKEN", "expected-token")
+    monkeypatch.setattr(
+        server,
+        "get_http_headers",
+        lambda: {"authorization": "Bearer wrong-token"},
+    )
+
+    async def call_next(_context):
+        return "ok"
+
+    with pytest.raises(server.McpError, match="Unauthorized"):
+        asyncio.run(middleware.on_request(None, call_next))
+
+
+def test_gateway_auth_middleware_accepts_correct_token(monkeypatch):
+    middleware = server.BearerAuthMiddleware()
+    monkeypatch.delenv("ALLOW_INSECURE_DEV", raising=False)
+    monkeypatch.setenv("MCP_GATEWAY_TOKEN", "expected-token")
+    monkeypatch.setattr(
+        server,
+        "get_http_headers",
+        lambda: {"authorization": "Bearer expected-token"},
+    )
+
+    async def call_next(_context):
+        return "ok"
+
+    assert asyncio.run(middleware.on_request(None, call_next)) == "ok"
+
+
+def test_rate_limit_middleware_rejects_burst_overflow():
+    middleware = RateLimitingMiddleware(
+        max_requests_per_second=0.01,
+        burst_capacity=1,
+        global_limit=True,
+    )
+
+    async def call_next(_context):
+        return "ok"
+
+    assert asyncio.run(middleware.on_request(None, call_next)) == "ok"
+    with pytest.raises(RateLimitError, match="Global rate limit exceeded"):
+        asyncio.run(middleware.on_request(None, call_next))
+
+
 def test_modal_auth_is_fail_closed(monkeypatch):
     monkeypatch.delenv("MODAL_ENDPOINT_TOKEN", raising=False)
     with pytest.raises(RuntimeError):
@@ -68,6 +133,17 @@ def test_async_drive_tool_rejects_invalid_file_id():
     result = asyncio.run(_invoke_tool(server.start_drive_processing, file_id=""))
     assert result.startswith("Error:")
     assert "file_id" in result
+
+
+def test_sync_drive_tool_rejects_invalid_inputs():
+    invalid_file_id = asyncio.run(_invoke_tool(server.process_images_from_drive, file_id=""))
+    invalid_force = asyncio.run(
+        _invoke_tool(server.process_images_from_drive, force_reprocess="yes")
+    )
+    assert invalid_file_id.startswith("Error:")
+    assert "file_id" in invalid_file_id
+    assert invalid_force.startswith("Error:")
+    assert "force_reprocess" in invalid_force
 
 
 def test_safe_error_does_not_dump_large_body():

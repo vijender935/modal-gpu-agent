@@ -14,6 +14,7 @@ Drive submission is optional. Set ASYNC_PROCESS_ENDPOINT to exercise it.
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -38,7 +39,15 @@ def main() -> int:
         "async_process": os.getenv("ASYNC_PROCESS_ENDPOINT"),
     }
     headers = {"Authorization": f"Bearer {token}"}
+    invalid_headers = {"Authorization": f"Bearer {secrets.token_urlsafe(24)}"}
     with httpx.Client(timeout=180, follow_redirects=False) as client:
+        unauthorized = client.post(endpoints["gpu"], headers=invalid_headers, json={})
+        print(f"wrong-token: {unauthorized.status_code} {unauthorized.text[:300]}")
+        if unauthorized.status_code not in {401, 403}:
+            raise SystemExit(
+                "wrong-token check failed: expected HTTP 401 or 403 from the GPU endpoint"
+            )
+
         if endpoints["health"]:
             response = client.get(endpoints["health"])
             print(f"health: {response.status_code} {response.text[:300]}")

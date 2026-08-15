@@ -24,6 +24,7 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from fastmcp.utilities.types import Image
+from mcp.types import ErrorData
 from starlette.responses import JSONResponse
 
 IMAGE_ENDPOINT = os.getenv(
@@ -104,15 +105,17 @@ class BearerAuthMiddleware(Middleware):
 
         expected = _gateway_token()
         if not expected:
-            raise McpError(code=-32001, message="MCP gateway authentication is not configured")
+            raise McpError(
+                ErrorData(code=-32001, message="MCP gateway authentication is not configured")
+            )
 
         headers = get_http_headers()
         authorization = headers.get("authorization", "")
         scheme, _, provided = authorization.partition(" ")
         if scheme.lower() != "bearer" or not provided:
-            raise McpError(code=-32001, message="Unauthorized")
+            raise McpError(ErrorData(code=-32001, message="Unauthorized"))
         if not hmac.compare_digest(provided, expected):
-            raise McpError(code=-32001, message="Unauthorized")
+            raise McpError(ErrorData(code=-32001, message="Unauthorized"))
         return await call_next(context)
 
 
@@ -373,8 +376,11 @@ async def process_images_from_drive(
     """Process Drive images idempotently, optionally selecting one file or forcing reprocessing."""
     try:
         _validate_dimensions(target_w, target_h, require_multiple=False)
+        if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
+            raise ValueError("file_id must be a non-empty string when provided")
+        if not isinstance(force_reprocess, bool):
+            raise TypeError("force_reprocess must be a boolean")
         response = await _post(
-
             PROCESS_ENDPOINT,
             {
                 "target_w": target_w,

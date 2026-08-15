@@ -32,7 +32,7 @@ For larger Drive batches, call `start_drive_processing` and then poll `get_drive
    - `ASYNC_PROCESS_ENDPOINT`
    - `STATUS_ENDPOINT`
 
-Health check: `GET https://YOUR-RENDER-URL/health`. The response reports whether required gateway tokens and endpoint URLs are configured without revealing secret values. For a pre-merge live test, use temporary staging tokens and run `python scripts/staging_smoke_test.py` with the Modal endpoint URLs; the script checks health, GPU, sandbox, image generation, and optional async Drive submission. For production, rotate `MCP_GATEWAY_TOKEN` and `MODAL_ENDPOINT_TOKEN` independently, update both matching deployment locations, and verify wrong-token rejection before enabling client traffic.
+Health check: `GET https://YOUR-RENDER-URL/health`. The response reports whether required gateway tokens and endpoint URLs are configured without revealing secret values. For a pre-merge live test, use temporary staging tokens and run `python scripts/staging_smoke_test.py` with the Modal endpoint URLs; the script checks wrong-token rejection, health, GPU, sandbox, image generation, and optional async Drive submission. For production, rotate `MCP_GATEWAY_TOKEN` and `MODAL_ENDPOINT_TOKEN` independently, update both matching deployment locations, and verify wrong-token rejection before enabling client traffic.
 
 ## Grok connector
 
