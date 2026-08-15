@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import server
 
 
 async def _invoke_tool(tool, **arguments):
+    if inspect.iscoroutinefunction(tool):
+        return await tool(**arguments)
     function = getattr(tool, "fn", None) or getattr(tool, "__wrapped__", None)
     if function is not None:
         return await function(**arguments)
