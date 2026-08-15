@@ -360,7 +360,7 @@ def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
     block_network=True,
     restrict_modal_access=True,
     single_use_containers=True,
-    max_containers=10,
+    max_containers=2,
 )
 def run_python_sandbox_cpu(code: str, timeout_seconds: int = 60):
     return _execute_python_sandbox(code, timeout_seconds)
@@ -376,7 +376,7 @@ def run_python_sandbox_cpu(code: str, timeout_seconds: int = 60):
     block_network=True,
     restrict_modal_access=True,
     single_use_containers=True,
-    max_containers=10,
+    max_containers=2,
 )
 def run_python_sandbox_gpu(code: str, timeout_seconds: int = 60):
     return _execute_python_sandbox(code, timeout_seconds)
