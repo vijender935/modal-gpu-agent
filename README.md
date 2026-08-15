@@ -38,12 +38,14 @@ Or manually: `modal deploy app.py`
 ## Endpoints (after deploy)
 
 - `...-generate-image-endpoint.modal.run`
-- `...-run-code-endpoint.modal.run`
+- `...-check-gpu-endpoint.modal.run`
 - `...-process-drive-endpoint.modal.run`
+
+The arbitrary-code endpoint has been removed from the production application. All remaining Modal endpoints require `Authorization: Bearer <MODAL_ENDPOINT_TOKEN>`. Create a Modal secret named **`modal-endpoint-auth`** containing `MODAL_ENDPOINT_TOKEN`. The MCP gateway must use the same token in its `MODAL_ENDPOINT_TOKEN` environment variable.
 
 ## MCP (Render)
 
-See `mcp-server/README.md`.
+See `mcp-server/README.md`. The Render service requires `MCP_GATEWAY_TOKEN`; configure the Manus connector with the same bearer token. The unauthenticated health check is available at `/health`.
 
 ## Test from Grok
 

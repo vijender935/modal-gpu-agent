@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+token.json
+credentials.json
+*.pem
+*.key
+
+# Local review artifacts
+REVIEW.md
+*.patch
