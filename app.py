@@ -769,7 +769,7 @@ def process_drive_images(
                 ok, mode, cropped, msg = _smart_crop(img, target_w, target_h)
                 if not ok:
                     details.append({"file": name, "ok": False, "msg": msg})
-                failed_count += 1
+                    failed_count += 1
                     continue
 
                 out_name = name
