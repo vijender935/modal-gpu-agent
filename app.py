@@ -112,7 +112,7 @@ image = (
     .pip_install(
         "torch",
         "torchvision",
-        "diffusers",
+        "git+https://github.com/huggingface/diffusers.git",  # latest for Flux2KleinPipeline
         "transformers",
         "accelerate",
         "safetensors",
@@ -591,10 +591,10 @@ def check_gpu_status():
 
 
 # -----------------------------
-# 3. Image Generation (Flux)
+# 3. Image Generation (FLUX.2 [klein] 4B)
 # -----------------------------
-# FLUX.1-schnell needs ~20GB+ VRAM in full precision.
-# T4 (16GB) OOMs. Use A10G (24GB) + float16 + slicing.
+# FLUX.2-klein-4B: ~13GB VRAM, Apache 2.0, 4-step distilled, excellent quality/speed.
+# Runs reliably on A10G with model_cpu_offload.
 @app.cls(
     image=image,
     gpu="A10G",
@@ -609,7 +609,7 @@ class ImageGenerator:
     @modal.enter()
     def load_model(self):
         import torch
-        from diffusers import FluxPipeline
+        from diffusers import Flux2KleinPipeline
 
         hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
         if not hf_token:
@@ -618,31 +618,33 @@ class ImageGenerator:
                 "Create a Modal secret named 'huggingface' with key HF_TOKEN."
             )
             raise RuntimeError(
-                "HF_TOKEN is required to download the gated FLUX.1-schnell model. "
-                "Create a Modal secret named 'huggingface' containing HF_TOKEN="
-                "<your_hugging_face_token> and accept the model license at "
-                "https://huggingface.co/black-forest-labs/FLUX.1-schnell"
+                "HF_TOKEN is required. Create a Modal secret named 'huggingface' "
+                "containing HF_TOKEN=<your_hugging_face_token>. "
+                "Model: https://huggingface.co/black-forest-labs/FLUX.2-klein-4B"
             )
 
-        logger.info("ImageGenerator: starting FLUX.1-schnell model load on A10G...")
+        logger.info("ImageGenerator: starting FLUX.2 [klein] 4B model load on A10G...")
         try:
-            self.pipe = FluxPipeline.from_pretrained(
-                "black-forest-labs/FLUX.1-schnell",
-                torch_dtype=torch.float16,
+            self.pipe = Flux2KleinPipeline.from_pretrained(
+                "black-forest-labs/FLUX.2-klein-4B",
+                torch_dtype=torch.bfloat16,
                 cache_dir="/models",
                 token=hf_token,
             )
-            # Memory optimizations for large models
+
+            # Memory optimizations — critical for stable A10G runs
+            self.pipe.enable_model_cpu_offload()
             self.pipe.enable_attention_slicing()
             if hasattr(self.pipe, "enable_vae_slicing"):
                 self.pipe.enable_vae_slicing()
-            self.pipe = self.pipe.to("cuda")
+            if hasattr(self.pipe, "enable_vae_tiling"):
+                self.pipe.enable_vae_tiling()
 
             if self.pipe is None:
-                raise RuntimeError("FluxPipeline loaded as None")
-            logger.info("ImageGenerator: FLUX model loaded successfully on A10G")
+                raise RuntimeError("Flux2KleinPipeline loaded as None")
+            logger.info("ImageGenerator: FLUX.2 [klein] 4B loaded successfully on A10G")
         except Exception as exc:
-            logger.exception("ImageGenerator: failed to load FLUX model")
+            logger.exception("ImageGenerator: failed to load FLUX.2-klein-4B model")
             raise RuntimeError(f"Failed to load image generation model: {exc}") from exc
 
     @modal.method()
@@ -653,6 +655,7 @@ class ImageGenerator:
         height: int = 1024,
         num_inference_steps: int = 4,
         seed: int | None = None,
+        guidance_scale: float = 1.0,
     ) -> bytes:
         import torch
 
@@ -668,8 +671,8 @@ class ImageGenerator:
             width=width,
             height=height,
             num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
             generator=generator,
-            guidance_scale=0.0,
         ).images[0]
 
         buf = io.BytesIO()
@@ -1063,7 +1066,8 @@ def main():
     print("Secrets required:")
     print("  - google-drive")
     print("  - modal-endpoint-auth")
-    print("  - huggingface  (key: HF_TOKEN)  <-- required for FLUX image generation")
+    print("  - huggingface  (key: HF_TOKEN)  <-- required for FLUX.2-klein-4B image generation")
     print("  Drive keys: GOOGLE_OAUTH_TOKEN_JSON, INPUT_FOLDER_ID, OUTPUT_FOLDER_ID")
     print("  Endpoint key: MODAL_ENDPOINT_TOKEN")
     print("  HF key: HF_TOKEN (from https://huggingface.co/settings/tokens)")
+    print("Model: black-forest-labs/FLUX.2-klein-4B (Apache 2.0)")
