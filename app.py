@@ -596,6 +596,7 @@ def check_gpu_status():
 # -----------------------------
 # FLUX.2-klein-4B: ~13GB VRAM, Apache 2.0, 4-step distilled, excellent quality/speed.
 # Runs reliably on A10G with model_cpu_offload.
+# Generated images are also uploaded to Google Drive OUTPUT_FOLDER_ID.
 @app.cls(
     image=image,
     gpu="A10G",
@@ -604,7 +605,10 @@ def check_gpu_status():
     max_containers=2,
     volumes={"/models": model_volume},
     memory=24576,
-    secrets=[modal.Secret.from_name("huggingface")],
+    secrets=[
+        modal.Secret.from_name("huggingface"),
+        modal.Secret.from_name("google-drive"),
+    ],
 )
 class ImageGenerator:
     @modal.enter()
@@ -657,6 +661,7 @@ class ImageGenerator:
         num_inference_steps: int = 4,
         seed: int | None = None,
         guidance_scale: float = 1.0,
+        save_to_drive: bool = True,
     ) -> bytes:
         import torch
 
@@ -678,7 +683,45 @@ class ImageGenerator:
 
         buf = io.BytesIO()
         image.save(buf, format="PNG")
-        return buf.getvalue()
+        image_bytes = buf.getvalue()
+
+        # Optionally upload generated image to Google Drive OUTPUT folder
+        if save_to_drive:
+            output_folder_id = os.environ.get("OUTPUT_FOLDER_ID")
+            if output_folder_id:
+                try:
+                    service = _get_drive_service()
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    short_id = uuid.uuid4().hex[:8]
+                    filename = f"generated_{timestamp}_{short_id}.png"
+
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        tmp.write(image_bytes)
+                        tmp_path = tmp.name
+
+                    try:
+                        file_id = _upload_file(service, tmp_path, output_folder_id, filename)
+                        logger.info(
+                            "ImageGenerator: uploaded generated image to Drive as %s (id=%s)",
+                            filename,
+                            file_id,
+                        )
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                except Exception:
+                    logger.exception(
+                        "ImageGenerator: failed to upload generated image to Drive "
+                        "(image still returned to caller)"
+                    )
+            else:
+                logger.warning(
+                    "ImageGenerator: OUTPUT_FOLDER_ID not set, skipping Drive upload"
+                )
+
+        return image_bytes
 
 
 # -----------------------------
@@ -1072,3 +1115,4 @@ def main():
     print("  Endpoint key: MODAL_ENDPOINT_TOKEN")
     print("  HF key: HF_TOKEN (from https://huggingface.co/settings/tokens)")
     print("Model: black-forest-labs/FLUX.2-klein-4B (Apache 2.0)")
+    print("Generated images are saved to Drive OUTPUT_FOLDER_ID")
