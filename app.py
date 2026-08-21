@@ -595,6 +595,7 @@ def check_gpu_status():
 # -----------------------------
 # FLUX.1-schnell is a gated model on Hugging Face.
 # Requires HF_TOKEN secret (Modal secret name: "huggingface").
+# Note: Modal 1.5.x does not support required=False on Secret.from_name
 @app.cls(
     image=image,
     gpu="T4",
@@ -603,7 +604,7 @@ def check_gpu_status():
     max_containers=2,
     volumes={"/models": model_volume},
     memory=16384,
-    secrets=[modal.Secret.from_name("huggingface", required=False)],
+    secrets=[modal.Secret.from_name("huggingface")],
 )
 class ImageGenerator:
     @modal.enter()
