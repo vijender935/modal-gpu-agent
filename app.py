@@ -591,13 +591,17 @@ def check_gpu_status():
 # -----------------------------
 # 3. Image Generation (Flux)
 # -----------------------------
+# Changed from A10 → T4 for better availability, lower cost, and consistency
+# with the rest of the stack. Added robust load error handling to prevent
+# crash-loops when the model fails to load or volume is empty.
 @app.cls(
     image=image,
-    gpu="A10",
-    timeout=10 * 60,
-    scaledown_window=2 * 60,
+    gpu="T4",
+    timeout=12 * 60,
+    scaledown_window=5 * 60,
     max_containers=2,
     volumes={"/models": model_volume},
+    memory=16384,
 )
 class ImageGenerator:
     @modal.enter()
@@ -605,11 +609,22 @@ class ImageGenerator:
         import torch
         from diffusers import FluxPipeline
 
-        self.pipe = FluxPipeline.from_pretrained(
-            "black-forest-labs/FLUX.1-schnell",
-            torch_dtype=torch.bfloat16,
-            cache_dir="/models",
-        ).to("cuda")
+        logger.info("ImageGenerator: starting FLUX.1-schnell model load...")
+        try:
+            self.pipe = FluxPipeline.from_pretrained(
+                "black-forest-labs/FLUX.1-schnell",
+                torch_dtype=torch.bfloat16,
+                cache_dir="/models",
+            ).to("cuda")
+            # Quick sanity check that the pipeline is usable
+            if self.pipe is None:
+                raise RuntimeError("FluxPipeline loaded as None")
+            logger.info("ImageGenerator: FLUX model loaded successfully")
+        except Exception as exc:
+            logger.exception("ImageGenerator: failed to load FLUX model")
+            # Re-raise so Modal marks the container as failed instead of
+            # leaving a half-initialized instance that will crash on generate()
+            raise RuntimeError(f"Failed to load image generation model: {exc}") from exc
 
     @modal.method()
     def generate(
@@ -621,6 +636,9 @@ class ImageGenerator:
         seed: int | None = None,
     ) -> bytes:
         import torch
+
+        if not hasattr(self, "pipe") or self.pipe is None:
+            raise RuntimeError("Image generation model is not loaded")
 
         generator = None
         if seed is not None:

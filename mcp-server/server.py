@@ -82,8 +82,9 @@ def _validate_prompt(prompt: str) -> None:
 mcp = FastMCP("Modal GPU Agent", strict_input_validation=True)
 mcp.add_middleware(
     RateLimitingMiddleware(
-        max_requests_per_second=float(os.getenv("MCP_REQUESTS_PER_SECOND", "0.2")),
-        burst_capacity=int(os.getenv("MCP_BURST_CAPACITY", "5")),
+        # Slightly relaxed defaults for image generation workloads
+        max_requests_per_second=float(os.getenv("MCP_REQUESTS_PER_SECOND", "0.5")),
+        burst_capacity=int(os.getenv("MCP_BURST_CAPACITY", "8")),
     )
 )
 mcp.add_middleware(LoggingMiddleware(include_payloads=False))
