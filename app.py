@@ -125,6 +125,7 @@ image = (
         "google-api-python-client",
         "google-auth",
         "google-auth-httplib2",
+        "huggingface_hub",
     )
 )
 
@@ -342,6 +343,7 @@ def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
         "GOOGLE_OAUTH_TOKEN_JSON",
         "INPUT_FOLDER_ID",
         "OUTPUT_FOLDER_ID",
+        "HF_TOKEN",
     }
     safe_env = {
         key: value
@@ -591,9 +593,8 @@ def check_gpu_status():
 # -----------------------------
 # 3. Image Generation (Flux)
 # -----------------------------
-# Changed from A10 → T4 for better availability, lower cost, and consistency
-# with the rest of the stack. Added robust load error handling to prevent
-# crash-loops when the model fails to load or volume is empty.
+# FLUX.1-schnell is a gated model on Hugging Face.
+# Requires HF_TOKEN secret (Modal secret name: "huggingface").
 @app.cls(
     image=image,
     gpu="T4",
@@ -602,6 +603,7 @@ def check_gpu_status():
     max_containers=2,
     volumes={"/models": model_volume},
     memory=16384,
+    secrets=[modal.Secret.from_name("huggingface", required=False)],
 )
 class ImageGenerator:
     @modal.enter()
@@ -609,21 +611,32 @@ class ImageGenerator:
         import torch
         from diffusers import FluxPipeline
 
+        hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        if not hf_token:
+            logger.error(
+                "ImageGenerator: HF_TOKEN is missing. "
+                "Create a Modal secret named 'huggingface' with key HF_TOKEN."
+            )
+            raise RuntimeError(
+                "HF_TOKEN is required to download the gated FLUX.1-schnell model. "
+                "Create a Modal secret named 'huggingface' containing HF_TOKEN="
+                "<your_hugging_face_token> and accept the model license at "
+                "https://huggingface.co/black-forest-labs/FLUX.1-schnell"
+            )
+
         logger.info("ImageGenerator: starting FLUX.1-schnell model load...")
         try:
             self.pipe = FluxPipeline.from_pretrained(
                 "black-forest-labs/FLUX.1-schnell",
                 torch_dtype=torch.bfloat16,
                 cache_dir="/models",
+                token=hf_token,
             ).to("cuda")
-            # Quick sanity check that the pipeline is usable
             if self.pipe is None:
                 raise RuntimeError("FluxPipeline loaded as None")
             logger.info("ImageGenerator: FLUX model loaded successfully")
         except Exception as exc:
             logger.exception("ImageGenerator: failed to load FLUX model")
-            # Re-raise so Modal marks the container as failed instead of
-            # leaving a half-initialized instance that will crash on generate()
             raise RuntimeError(f"Failed to load image generation model: {exc}") from exc
 
     @modal.method()
@@ -1041,6 +1054,10 @@ def process_drive_endpoint(
 def main():
     print("GPU Agent ready.")
     print("Deploy: modal deploy app.py")
-    print("Secrets required: google-drive and modal-endpoint-auth")
+    print("Secrets required:")
+    print("  - google-drive")
+    print("  - modal-endpoint-auth")
+    print("  - huggingface  (key: HF_TOKEN)  <-- required for FLUX image generation")
     print("  Drive keys: GOOGLE_OAUTH_TOKEN_JSON, INPUT_FOLDER_ID, OUTPUT_FOLDER_ID")
     print("  Endpoint key: MODAL_ENDPOINT_TOKEN")
+    print("  HF key: HF_TOKEN (from https://huggingface.co/settings/tokens)")
