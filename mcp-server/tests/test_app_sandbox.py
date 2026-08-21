@@ -18,10 +18,19 @@ def test_sandbox_runs_code_and_returns_files():
 
 def test_sandbox_scrubs_sensitive_environment(monkeypatch):
     monkeypatch.setenv("GOOGLE_OAUTH_TOKEN_JSON", "must-not-leak")
-    result = app._execute_python_sandbox("import os; print(os.getenv('GOOGLE_OAUTH_TOKEN_JSON'))")
+    monkeypatch.setenv("HF_TOKEN", "hf-secret")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hub-secret")
+    code = (
+        "import os; print(os.getenv('GOOGLE_OAUTH_TOKEN_JSON')); "
+        "print(os.getenv('HF_TOKEN')); "
+        "print(os.getenv('HUGGING_FACE_HUB_TOKEN'))"
+    )
+    result = app._execute_python_sandbox(code)
     assert result["success"] is True
     assert "must-not-leak" not in result["stdout"]
-    assert "None" in result["stdout"]
+    assert "hf-secret" not in result["stdout"]
+    assert "hub-secret" not in result["stdout"]
+    assert result["stdout"].count("None") == 3
 
 
 def test_sandbox_timeout_is_bounded():

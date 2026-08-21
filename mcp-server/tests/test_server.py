@@ -118,21 +118,48 @@ def test_unsafe_code_tool_is_not_registered():
     assert not hasattr(server.mcp, "run_gpu_code")
 
 
-def test_generate_image_returns_image_content(monkeypatch):
+def test_generate_image_validates_generation_controls():
+    invalid_steps = asyncio.run(
+        _invoke_tool(server.generate_image, prompt="a test", num_inference_steps=0)
+    )
+    invalid_guidance = asyncio.run(
+        _invoke_tool(server.generate_image, prompt="a test", guidance_scale=11)
+    )
+    assert invalid_steps.startswith("Error:")
+    assert "num_inference_steps" in invalid_steps
+    assert invalid_guidance.startswith("Error:")
+    assert "guidance_scale" in invalid_guidance
+
+
+def test_generate_image_returns_image_content_and_forwards_controls(monkeypatch):
     class FakeResponse:
         status_code = 200
         content = b"fake-png"
 
-    async def fake_post(*args, **kwargs):
+    captured = {}
+
+    async def fake_post(endpoint, payload, *, timeout):
+        captured.update(payload)
         return FakeResponse()
 
     monkeypatch.setattr(server, "_post", fake_post)
     monkeypatch.setenv("MODAL_ENDPOINT_TOKEN", "test-token")
     result = asyncio.run(
-        _invoke_tool(server.generate_image, prompt="a test", width=1024, height=1024)
+        _invoke_tool(
+            server.generate_image,
+            prompt="a test",
+            width=1024,
+            height=1024,
+            num_inference_steps=8,
+            guidance_scale=3,
+            seed=123,
+        )
     )
     assert result.__class__.__name__ == "Image"
     assert result.data == b"fake-png"
+    assert captured["num_inference_steps"] == 8
+    assert captured["guidance_scale"] == 3.0
+    assert captured["seed"] == 123
 
 
 def test_post_includes_request_id_header(monkeypatch):

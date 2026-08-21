@@ -9,6 +9,7 @@ The public MCP gateway is connector-accessible without a gateway token.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 import uuid
@@ -47,6 +48,8 @@ STATUS_ENDPOINT = os.getenv(
 )
 
 MAX_PROMPT_LENGTH = 2_000
+MAX_INFERENCE_STEPS = 20
+MAX_GUIDANCE_SCALE = 10.0
 MAX_SANDBOX_CODE_LENGTH = 32_000
 MAX_SANDBOX_TIMEOUT = 120
 MAX_RETRIES = 2
@@ -77,6 +80,19 @@ def _validate_prompt(prompt: str) -> None:
         raise ValueError("prompt must be a non-empty string")
     if len(prompt) > MAX_PROMPT_LENGTH:
         raise ValueError(f"prompt must be at most {MAX_PROMPT_LENGTH} characters")
+
+
+def _validate_generation_controls(num_inference_steps: int, guidance_scale: float) -> None:
+    if isinstance(num_inference_steps, bool) or not isinstance(num_inference_steps, int):
+        raise TypeError("num_inference_steps must be an integer")
+    if not 1 <= num_inference_steps <= MAX_INFERENCE_STEPS:
+        raise ValueError(
+            f"num_inference_steps must be between 1 and {MAX_INFERENCE_STEPS}"
+        )
+    if isinstance(guidance_scale, bool) or not isinstance(guidance_scale, (int, float)):
+        raise TypeError("guidance_scale must be a number")
+    if not math.isfinite(float(guidance_scale)) or not 0.0 <= float(guidance_scale) <= MAX_GUIDANCE_SCALE:
+        raise ValueError(f"guidance_scale must be between 0 and {MAX_GUIDANCE_SCALE}")
 
 
 mcp = FastMCP("Modal GPU Agent", strict_input_validation=True)
@@ -202,17 +218,31 @@ async def generate_image(
     prompt: str,
     width: int = 1024,
     height: int = 1024,
+    num_inference_steps: int = 4,
+    guidance_scale: float = 1.0,
     seed: int | None = None,
 ) -> Image | str:
-    """Generate a PNG image using Flux on Modal GPU and return it as an MCP image artifact."""
+    """Generate a PNG image using Flux on Modal GPU and return it as an MCP image artifact.
+
+    Higher inference steps can improve refinement at the cost of latency; guidance scale
+    controls how strongly the result follows the prompt.
+    """
     try:
         _validate_prompt(prompt)
         _validate_dimensions(width, height, max_side=2048)
+        _validate_generation_controls(num_inference_steps, guidance_scale)
         if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
             raise ValueError("seed must be an integer")
         response = await _post(
             IMAGE_ENDPOINT,
-            {"prompt": prompt, "width": width, "height": height, "seed": seed},
+            {
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                "num_inference_steps": num_inference_steps,
+                "guidance_scale": float(guidance_scale),
+                "seed": seed,
+            },
             timeout=300.0,
         )
     except (ValueError, RuntimeError) as exc:

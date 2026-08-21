@@ -7,6 +7,7 @@ import hmac
 import io
 import json
 import logging
+import math
 import mimetypes
 import os
 import resource
@@ -30,6 +31,8 @@ MAX_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_IMAGE_PIXELS = 36_000_000
 MAX_IMAGE_SIDE = 8_192
 MAX_GENERATED_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_INFERENCE_STEPS = 20
+MAX_GUIDANCE_SCALE = 10.0
 MAX_SANDBOX_CODE_LENGTH = 32_000
 MAX_SANDBOX_TIMEOUT = 120
 MAX_SANDBOX_OUTPUT_BYTES = 1_000_000
@@ -119,6 +122,10 @@ image = (
         "safetensors",
         "Pillow",
         "numpy",
+        "pandas",
+        "matplotlib",
+        "scipy",
+        "scikit-learn",
         "opencv-python-headless",
         "ultralytics",
         "fastapi[standard]",
@@ -345,6 +352,7 @@ def _execute_python_sandbox(code: str, timeout_seconds: int = 60) -> dict:
         "INPUT_FOLDER_ID",
         "OUTPUT_FOLDER_ID",
         "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
     }
     safe_env = {
         key: value
@@ -667,6 +675,18 @@ class ImageGenerator:
 
         if not hasattr(self, "pipe") or self.pipe is None:
             raise RuntimeError("Image generation model is not loaded")
+        if isinstance(num_inference_steps, bool) or not isinstance(num_inference_steps, int):
+            raise TypeError("num_inference_steps must be an integer")
+        if not 1 <= num_inference_steps <= MAX_INFERENCE_STEPS:
+            raise ValueError(
+                f"num_inference_steps must be between 1 and {MAX_INFERENCE_STEPS}"
+            )
+        if isinstance(guidance_scale, bool) or not isinstance(guidance_scale, (int, float)):
+            raise TypeError("guidance_scale must be a number")
+        if not math.isfinite(float(guidance_scale)) or not 0.0 <= float(guidance_scale) <= MAX_GUIDANCE_SCALE:
+            raise ValueError(
+                f"guidance_scale must be between 0 and {MAX_GUIDANCE_SCALE}"
+            )
 
         generator = None
         if seed is not None:
@@ -677,7 +697,7 @@ class ImageGenerator:
             width=width,
             height=height,
             num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
+            guidance_scale=float(guidance_scale),
             generator=generator,
         ).images[0]
 
@@ -868,18 +888,37 @@ def generate_image_endpoint(
     width = item.get("width", 1024)
     height = item.get("height", 1024)
     seed = item.get("seed")
+    num_inference_steps = item.get("num_inference_steps", 4)
+    guidance_scale = item.get("guidance_scale", 1.0)
     try:
         _validate_prompt(prompt)
         _validate_dimensions(width, height, max_side=2048)
         if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
             raise ValueError("seed must be an integer")
-    except ValueError as exc:
+        if isinstance(num_inference_steps, bool) or not isinstance(num_inference_steps, int):
+            raise TypeError("num_inference_steps must be an integer")
+        if not 1 <= num_inference_steps <= MAX_INFERENCE_STEPS:
+            raise ValueError(
+                f"num_inference_steps must be between 1 and {MAX_INFERENCE_STEPS}"
+            )
+        if isinstance(guidance_scale, bool) or not isinstance(guidance_scale, (int, float)):
+            raise TypeError("guidance_scale must be a number")
+        if not math.isfinite(float(guidance_scale)) or not 0.0 <= float(guidance_scale) <= MAX_GUIDANCE_SCALE:
+            raise ValueError(
+                f"guidance_scale must be between 0 and {MAX_GUIDANCE_SCALE}"
+            )
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
         generator = ImageGenerator()
         image_bytes = generator.generate.remote(
-            prompt=prompt, width=width, height=height, seed=seed
+            prompt=prompt,
+            width=width,
+            height=height,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            guidance_scale=float(guidance_scale),
         )
     except Exception as exc:
         _log_request(request_id, "generate_image", 502, started_at)

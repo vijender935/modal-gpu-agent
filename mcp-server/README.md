@@ -4,14 +4,14 @@ Control Modal GPU functions from Grok.
 
 ## Tools
 
-- `generate_image` – Flux image generation with an MCP image artifact response
+- `generate_image` – Flux image generation with an MCP image artifact response; supports `num_inference_steps` (1–20) and `guidance_scale` (0–10) controls
 - `check_gpu` – CUDA / GPU health check without user-provided code
 - `run_python` – general-purpose Python in an isolated, network-blocked CPU/GPU sandbox
 - `start_drive_processing` – queue a long-running Drive batch and return a job ID
 - `get_drive_processing_status` – poll an asynchronous Drive job by ID
 - `process_images_from_drive` – synchronous YOLO smart-crop for smaller batches
 
-`run_python` uses packages already installed in the Modal image; dynamic package installation is intentionally disabled. It accepts a maximum 32,000-character program and a timeout from 1 to 120 seconds. The sandbox receives no Drive/OAuth credentials, blocks network access, uses a single-use container, and returns bounded stdout/stderr plus at most ten generated files. GPU and CPU sandbox concurrency is capped at two containers each.
+`run_python` uses packages already installed in the Modal image, including NumPy, Pandas, Matplotlib, SciPy, scikit-learn, PyTorch, OpenCV, and Ultralytics; dynamic package installation is intentionally disabled. It accepts a maximum 32,000-character program and a timeout from 1 to 120 seconds. The sandbox receives no Drive/OAuth credentials, blocks network access, uses a single-use container, and returns bounded stdout/stderr plus at most ten generated files. GPU and CPU sandbox concurrency is capped at two containers each.
 
 For larger Drive batches, call `start_drive_processing` and then poll `get_drive_processing_status` with the returned job ID. The synchronous tool remains useful for small batches. Modal responses include a request ID, which should be retained when investigating logs or failures.
 
