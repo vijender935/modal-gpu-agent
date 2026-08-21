@@ -632,12 +632,10 @@ class ImageGenerator:
                 cache_dir="/models",
                 token=hf_token,
             )
-            # Memory optimizations
+            # Memory optimizations for large models
             self.pipe.enable_attention_slicing()
-            try:
+            if hasattr(self.pipe, "enable_vae_slicing"):
                 self.pipe.enable_vae_slicing()
-            except Exception:
-                pass
             self.pipe = self.pipe.to("cuda")
 
             if self.pipe is None:
@@ -771,7 +769,7 @@ def process_drive_images(
                 ok, mode, cropped, msg = _smart_crop(img, target_w, target_h)
                 if not ok:
                     details.append({"file": name, "ok": False, "msg": msg})
-                    failed_count += 1
+                failed_count += 1
                     continue
 
                 out_name = name
