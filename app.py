@@ -593,17 +593,16 @@ def check_gpu_status():
 # -----------------------------
 # 3. Image Generation (Flux)
 # -----------------------------
-# FLUX.1-schnell is a gated model on Hugging Face.
-# Requires HF_TOKEN secret (Modal secret name: "huggingface").
-# Note: Modal 1.5.x does not support required=False on Secret.from_name
+# FLUX.1-schnell needs ~20GB+ VRAM in full precision.
+# T4 (16GB) OOMs. Use A10G (24GB) + float16 + slicing.
 @app.cls(
     image=image,
-    gpu="T4",
+    gpu="A10G",
     timeout=12 * 60,
     scaledown_window=5 * 60,
     max_containers=2,
     volumes={"/models": model_volume},
-    memory=16384,
+    memory=24576,
     secrets=[modal.Secret.from_name("huggingface")],
 )
 class ImageGenerator:
@@ -625,17 +624,25 @@ class ImageGenerator:
                 "https://huggingface.co/black-forest-labs/FLUX.1-schnell"
             )
 
-        logger.info("ImageGenerator: starting FLUX.1-schnell model load...")
+        logger.info("ImageGenerator: starting FLUX.1-schnell model load on A10G...")
         try:
             self.pipe = FluxPipeline.from_pretrained(
                 "black-forest-labs/FLUX.1-schnell",
-                torch_dtype=torch.bfloat16,
+                torch_dtype=torch.float16,
                 cache_dir="/models",
                 token=hf_token,
-            ).to("cuda")
+            )
+            # Memory optimizations
+            self.pipe.enable_attention_slicing()
+            try:
+                self.pipe.enable_vae_slicing()
+            except Exception:
+                pass
+            self.pipe = self.pipe.to("cuda")
+
             if self.pipe is None:
                 raise RuntimeError("FluxPipeline loaded as None")
-            logger.info("ImageGenerator: FLUX model loaded successfully")
+            logger.info("ImageGenerator: FLUX model loaded successfully on A10G")
         except Exception as exc:
             logger.exception("ImageGenerator: failed to load FLUX model")
             raise RuntimeError(f"Failed to load image generation model: {exc}") from exc
