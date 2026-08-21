@@ -106,9 +106,10 @@ def _validate_prompt(prompt: str) -> None:
         raise ValueError(f"prompt must be at most {MAX_PROMPT_LENGTH} characters")
 
 # Base image with ML + Drive + OpenCV + YOLO deps
+# git is required because we install diffusers from GitHub (Flux2KleinPipeline)
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("libgl1", "libglib2.0-0")
+    .apt_install("libgl1", "libglib2.0-0", "git")
     .pip_install(
         "torch",
         "torchvision",
