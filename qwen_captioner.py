@@ -179,6 +179,7 @@ def build_qwen_captioner(app: modal.App):
     """Register Qwen2.5-VL captioning function on the given Modal app."""
 
     @app.function(
+        serialized=True,
         image=qwen_image,
         gpu="H100",
         timeout=60 * 60 * 3,
