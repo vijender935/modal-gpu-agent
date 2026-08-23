@@ -314,10 +314,10 @@ def build_qwen_captioner(app: modal.App):
                         "type": "image",
                         "file_name": name,
                         "drive_file_id": fid,
-                        "file_path": f"Input images/{name}",
+                        "file_path": f"AI_Input/{name}",
                         **data,
                         "model_used": model_name,
-                        "source": "Input images",
+                        "source": "AI_Input",
                     }
                     results.append(entry)
                     logger.info("Captioned %s (%d/%d)", name, idx + 1, len(files))
