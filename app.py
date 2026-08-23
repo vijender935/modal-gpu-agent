@@ -1169,7 +1169,7 @@ def generate_rag_captions_endpoint(
     item = item or {}
     max_items = item.get("max_items", 20)
     start_from = item.get("start_from", 0)
-    model_name = item.get("model_name", "Qwen/Qwen2.5-VL-7B-Instruct")
+    model_name = item.get("model_name", "Qwen/Qwen2.5-VL-72B-Instruct")
     output_filename = item.get("output_filename", "metadata_qwen_v1.jsonl")
 
     if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1 or max_items > 500:

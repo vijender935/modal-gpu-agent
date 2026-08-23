@@ -1,6 +1,6 @@
 """
-Qwen2.5-VL Captioner for Multimodal RAG Dataset Generation
-Runs on Modal H100. Produces structured JSONL entries.
+Qwen2.5-VL-72B Captioner for Multimodal RAG Dataset Generation
+Runs on Modal with 2x H100 GPUs. Produces structured JSONL entries.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import modal
 
 logger = logging.getLogger(__name__)
 
-# Separate image with Qwen VL dependencies
+# Separate image with Qwen2.5-VL-72B dependencies
 qwen_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("libgl1", "libglib2.0-0")
@@ -182,9 +182,9 @@ def build_qwen_captioner(app: modal.App):
     @app.function(
         serialized=True,
         image=qwen_image,
-        gpu="H100",
+        gpu="H100:2",
         timeout=60 * 60 * 3,
-        memory=65536,
+        memory=131072,
         volumes={"/models": model_volume},
         secrets=[
             modal.Secret.from_name("huggingface"),
@@ -196,11 +196,11 @@ def build_qwen_captioner(app: modal.App):
     def generate_rag_captions(
         max_items: int = 50,
         start_from: int = 0,
-        model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-VL-72B-Instruct",
         output_filename: str = "metadata_qwen_v1.jsonl",
     ) -> dict[str, Any]:
         """
-        Download images from Drive INPUT folder, caption with Qwen2.5-VL on H100,
+        Download images from Drive INPUT folder, caption with Qwen2.5-VL-72B on 2x H100,
         and upload structured JSONL to OUTPUT folder.
         """
         import torch
@@ -227,7 +227,7 @@ def build_qwen_captioner(app: modal.App):
                 "errors": 0,
             }
 
-        logger.info("Loading model %s on H100...", model_name)
+        logger.info("Loading model %s on 2x H100...", model_name)
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
