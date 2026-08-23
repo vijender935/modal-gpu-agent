@@ -135,6 +135,7 @@ image = (
         "google-auth-httplib2",
         "huggingface_hub",
     )
+    .add_local_python_source("qwen_captioner")
 )
 
 model_volume = modal.Volume.from_name("gpu-agent-models", create_if_missing=True)
