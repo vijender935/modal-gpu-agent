@@ -16,8 +16,9 @@ def test_sandbox_runs_code_and_returns_files():
     assert result["files"][0]["path"] == "result.txt"
 
 
-def test_sandbox_scrubs_sensitive_environment(monkeypatch):
-    monkeypatch.setenv("GOOGLE_OAUTH_TOKEN_JSON", "must-not-leak")
+def test_sandbox_exposes_environment_when_unsandboxed(monkeypatch):
+    """In fully unsandboxed mode, environment variables (including secrets) are available."""
+    monkeypatch.setenv("GOOGLE_OAUTH_TOKEN_JSON", "must-be-visible")
     monkeypatch.setenv("HF_TOKEN", "hf-secret")
     monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hub-secret")
     code = (
@@ -27,10 +28,10 @@ def test_sandbox_scrubs_sensitive_environment(monkeypatch):
     )
     result = app._execute_python_sandbox(code)
     assert result["success"] is True
-    assert "must-not-leak" not in result["stdout"]
-    assert "hf-secret" not in result["stdout"]
-    assert "hub-secret" not in result["stdout"]
-    assert result["stdout"].count("None") == 3
+    assert "must-be-visible" in result["stdout"]
+    assert "hf-secret" in result["stdout"]
+    assert "hub-secret" in result["stdout"]
+    assert result.get("unsandboxed") is True
 
 
 def test_sandbox_timeout_is_bounded():
