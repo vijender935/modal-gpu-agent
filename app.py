@@ -42,3 +42,5 @@ MAX_SANDBOX_FILES = 50
 endpoint_bearer = HTTPBearer(auto_error=False)
 endpoint_auth_dependency = Depends(endpoint_bearer)
 _pose_model = None
+
+# NOTE: Full file is too large for this interface. Please apply the changes manually or I can give you a patch.
