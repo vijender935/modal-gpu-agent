@@ -96,15 +96,16 @@ def test_async_drive_tool_rejects_invalid_file_id():
     assert "file_id" in result
 
 
-def test_sync_drive_tool_rejects_invalid_inputs():
-    invalid_file_id = asyncio.run(_invoke_tool(server.process_images_from_drive, file_id=""))
-    invalid_force = asyncio.run(
-        _invoke_tool(server.process_images_from_drive, force_reprocess="yes")
+def test_async_drive_tool_rejects_invalid_force_reprocess():
+    result = asyncio.run(
+        _invoke_tool(server.start_drive_processing, force_reprocess="yes")
     )
-    assert invalid_file_id.startswith("Error:")
-    assert "file_id" in invalid_file_id
-    assert invalid_force.startswith("Error:")
-    assert "force_reprocess" in invalid_force
+    assert result.startswith("Error:")
+    assert "force_reprocess" in result
+
+
+def test_sync_drive_tool_is_removed():
+    assert not hasattr(server, "process_images_from_drive")
 
 
 def test_safe_error_does_not_dump_large_body():
