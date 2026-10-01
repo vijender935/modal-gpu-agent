@@ -1,7 +1,8 @@
 """
 MCP gateway for the Modal GPU Agent.
 
-The public MCP gateway is connector-accessible without a gateway token.
+The MCP endpoint is protected by a secret URL path: /mcp/<MCP_PATH_TOKEN>.
+- MCP_PATH_TOKEN is the secret part of the MCP URL (set it in Render env vars).
 - MODAL_ENDPOINT_TOKEN authenticates calls to Modal web functions.
 - Arbitrary code execution is now fully unsandboxed (network + secrets available).
 """
@@ -53,7 +54,18 @@ MAX_GUIDANCE_SCALE = 10.0
 MAX_SANDBOX_CODE_LENGTH = 200_000
 MAX_SANDBOX_TIMEOUT = 600
 MAX_RETRIES = 2
+MIN_PATH_TOKEN_LENGTH = 24
 logger = logging.getLogger("modal-gpu-agent-mcp")
+
+
+def _mcp_path() -> str:
+    """Return the secret MCP path. Fails closed if the token is missing or short."""
+    token = os.environ.get("MCP_PATH_TOKEN", "").strip()
+    if len(token) < MIN_PATH_TOKEN_LENGTH:
+        raise RuntimeError(
+            f"MCP_PATH_TOKEN is missing or too short (min {MIN_PATH_TOKEN_LENGTH} chars)"
+        )
+    return f"/mcp/{token}"
 
 
 def _validate_dimensions(
@@ -402,5 +414,7 @@ async def generate_rag_captions(
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
+    # Secret URL: MCP is served at /mcp/<MCP_PATH_TOKEN> (token is never printed)
+    path = _mcp_path()
     print(f"Starting Modal GPU Agent MCP Server on port {port}")
-    mcp.run(transport="http", host="0.0.0.0", port=port)
+    mcp.run(transport="http", host="0.0.0.0", port=port, path=path)
