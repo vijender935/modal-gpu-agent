@@ -360,44 +360,6 @@ async def get_drive_processing_status(job_id: str) -> dict[str, Any] | str:
 
 
 @mcp.tool
-async def process_images_from_drive(
-    target_w: int = 1080,
-    target_h: int = 2340,
-    file_id: str | None = None,
-    force_reprocess: bool = False,
-) -> dict[str, Any] | str:
-    """Process Drive images idempotently, optionally selecting one file or forcing reprocessing."""
-    try:
-        _validate_dimensions(target_w, target_h, require_multiple=False)
-        if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
-            raise ValueError("file_id must be a non-empty string when provided")
-        if not isinstance(force_reprocess, bool):
-            raise TypeError("force_reprocess must be a boolean")
-        response = await _post(
-            PROCESS_ENDPOINT,
-            {
-                "target_w": target_w,
-                "target_h": target_h,
-                "file_id": file_id,
-                "force_reprocess": force_reprocess,
-            },
-            timeout=900.0,
-        )
-    except (ValueError, TypeError, RuntimeError) as exc:
-        return f"Error: {exc}"
-    if response.status_code != 200:
-        return _safe_error(response)
-    try:
-        result = response.json()
-    except ValueError:
-        return "Error: Drive endpoint returned invalid JSON"
-    details = result.get("details", [])
-    if isinstance(details, list):
-        result["details"] = details[:100]
-    return result
-
-
-@mcp.tool
 async def generate_rag_captions(
     max_items: int = 20,
     start_from: int = 0,
@@ -447,4 +409,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
     print(f"Starting Modal GPU Agent MCP Server on port {port}")
     mcp.run(transport="http", host="0.0.0.0", port=port)
-
