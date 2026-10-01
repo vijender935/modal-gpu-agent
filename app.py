@@ -1087,50 +1087,6 @@ def process_drive_status_endpoint(
     return {"status": "succeeded", "job_id": job_id, "result": result}
 
 
-@app.function(
-    image=image,
-    secrets=[
-        modal.Secret.from_name("google-drive"),
-        modal.Secret.from_name("modal-endpoint-auth"),
-    ],
-)
-@modal.fastapi_endpoint(method="POST")
-def process_drive_endpoint(
-    item: dict | None = None,
-    _credentials: HTTPAuthorizationCredentials | None = endpoint_auth_dependency,
-):
-    _require_endpoint_auth(_credentials)
-    request_id = _new_request_id()
-    started_at = time.monotonic()
-    item = item or {}
-    target_w = item.get("target_w", 1080)
-    target_h = item.get("target_h", 2340)
-    file_id = item.get("file_id")
-    force_reprocess = item.get("force_reprocess", False)
-    try:
-        _validate_dimensions(target_w, target_h, require_multiple=False)
-        if file_id is not None and (not isinstance(file_id, str) or not file_id.strip()):
-            raise ValueError("file_id must be a non-empty string when provided")
-        if not isinstance(force_reprocess, bool):
-            raise TypeError("force_reprocess must be a boolean")
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        result = process_drive_images.remote(
-            target_w=target_w,
-            target_h=target_h,
-            file_id=file_id,
-            force_reprocess=force_reprocess,
-        )
-    except Exception as exc:
-        _log_request(request_id, "process_drive_images", 502, started_at)
-        raise HTTPException(status_code=502, detail=f"Drive processing failed; request_id={request_id}") from exc
-    if isinstance(result, dict):
-        result = {**result, "request_id": request_id}
-    _log_request(request_id, "process_drive_images", 200, started_at)
-    return result
-
-
     # ==============================
 # 5. Qwen2.5-VL RAG Captioning (H100)
 # ==============================
