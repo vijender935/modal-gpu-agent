@@ -34,10 +34,6 @@ SANDBOX_ENDPOINT = os.getenv(
     "SANDBOX_ENDPOINT",
     "https://vijender935--gpu-agent-run-python-sandbox-endpoint.modal.run",
 )
-PROCESS_ENDPOINT = os.getenv(
-    "PROCESS_ENDPOINT",
-    "https://vijender935--gpu-agent-process-drive-endpoint.modal.run",
-)
 ASYNC_PROCESS_ENDPOINT = os.getenv(
     "ASYNC_PROCESS_ENDPOINT",
     "https://vijender935--gpu-agent-process-drive-async-endpoint.modal.run",
@@ -116,7 +112,6 @@ async def health_check(_request):
         "image_endpoint": bool(IMAGE_ENDPOINT),
         "gpu_endpoint": bool(GPU_ENDPOINT),
         "sandbox_endpoint": bool(SANDBOX_ENDPOINT),
-        "process_endpoint": bool(PROCESS_ENDPOINT),
         "async_process_endpoint": bool(ASYNC_PROCESS_ENDPOINT),
         "status_endpoint": bool(STATUS_ENDPOINT),
         "rag_caption_endpoint": bool(RAG_CAPTION_ENDPOINT),
